@@ -45,14 +45,16 @@
 
 <table align="center">
 <tr>
-<td align="center" width="33%">🗣️<br><b>Natural Language</b><br>Human-like interaction</td>
-<td align="center" width="33%">🧠<br><b>Multi-Mode AI</b><br>Ask, Plan, or Command</td>
-<td align="center" width="33%">🔄<br><b>Self-Healing</b><br>10-step auto-retry</td>
+<td align="center" width="25%">🗣️<br><b>Natural Language</b><br>Human-like interaction</td>
+<td align="center" width="25%">🧠<br><b>Multi-Mode AI</b><br>Ask, Plan, or Command</td>
+<td align="center" width="25%">🔄<br><b>Self-Healing</b><br>10-step auto-retry</td>
+<td align="center" width="25%">🍳<br><b>Recipe Mastery</b><br>Crafting & Smelting</td>
 </tr>
 <tr>
-<td align="center" width="33%">🌐<br><b>Web Search</b><br>Google Search Grounding</td>
-<td align="center" width="33%">↩️<br><b>Undo Engine</b><br>Revert AI mutations</td>
-<td align="center" width="33%">💾<br><b>History</b><br>JSON/TXT Export support</td>
+<td align="center" width="25%">🌐<br><b>Web Search</b><br>Google Search Grounding</td>
+<td align="center" width="25%">↩️<br><b>Undo Engine</b><br>Revert AI mutations</td>
+<td align="center" width="25%">💾<br><b>History</b><br>JSON/TXT Export support</td>
+<td align="center" width="25%">📦<br><b>Mod Integration</b><br>Full Registry Access</td>
 </tr>
 </table>
 
@@ -64,12 +66,14 @@
 
 <table align="center">
 <tr>
-<td align="center" width="50%">🏰<br><b>Structure Detection</b><br>AI knows if you're in a Village, Stronghold, or Ancient City automatically.</td>
-<td align="center" width="50%">💀<br><b>Death History</b><br>Lost your items? AI remembers where you died and can help you get back.</td>
+<td align="center" width="33%">🏰<br><b>Structure Detection</b><br>AI knows if you're in a Village, Stronghold, or Ancient City automatically.</td>
+<td align="center" width="33%">🍳<br><b>Recipe Fetching</b><br>Retrieves crafting & smelting paths for <b>any</b> item (Vanilla + Modded).</td>
+<td align="center" width="33%">💀<br><b>Death History</b><br>AI remembers where you died and can help you get back.</td>
 </tr>
 <tr>
-<td align="center" width="50%">⛅<br><b>Environmental Sync</b><br>Aware of time, weather, and dimension without being asked.</td>
-<td align="center" width="50%">🎒<br><b>Selective Context</b><br>Inventory data is only sent when needed (crafting/tools) to keep responses fast.</td>
+<td align="center" width="33%">⛅<br><b>Environmental Sync</b><br>Aware of time, weather, and dimension without being asked.</td>
+<td align="center" width="33%">🎒<br><b>Selective Context</b><br>Inventory data is only sent when needed (crafting/tools).</td>
+<td align="center" width="33%">🔍<br><b>Registry Access</b><br>Deep scans of all modded items, blocks, and entity types.</td>
 </tr>
 </table>
 

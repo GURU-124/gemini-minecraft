@@ -1,4 +1,4 @@
-package aaron.myfirstmod;
+package com.aaron.gemini;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -38,7 +38,7 @@ import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 
-public class MyFirstFabricModClient implements ClientModInitializer {
+public class GeminiCompanionClient implements ClientModInitializer {
 	private static final String KEY_CATEGORY = "key.categories.gemini_ai_companion";
 	private static final String KEY_OPEN_CONFIG = "key.gemini_ai_companion.chat_config";
 	private static final String KEY_PUSH_TO_TALK = "key.gemini_ai_companion.push_to_talk";
@@ -106,7 +106,7 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 			);
 		});
 
-		ClientPlayNetworking.registerGlobalReceiver(MyFirstFabricMod.ConfigPayloadS2C.ID, (payload, context) -> {
+		ClientPlayNetworking.registerGlobalReceiver(GeminiCompanion.ConfigPayloadS2C.ID, (payload, context) -> {
 			JsonObject obj = GSON.fromJson(payload.json(), JsonObject.class);
 			boolean debug = obj.get("debug").getAsBoolean();
 			boolean sidebar = obj.get("sidebar").getAsBoolean();
@@ -147,10 +147,13 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 				voiceUiUntilMs = System.currentTimeMillis() + 1500;
 				return;
 			}
+			sendVoiceState("LISTENING");
 			startRecording(client);
 		} else if (!pressed && recording) {
+			sendVoiceState("IDLE");
 			stopRecording(client);
 		} else if (recording && System.currentTimeMillis() - recordStartMs >= VOICE_MAX_SECONDS * 1000L) {
+			sendVoiceState("IDLE");
 			stopRecording(client);
 		}
 	}
@@ -222,12 +225,19 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 		}
 		voiceUiLabel = "Transcribing...";
 		voiceUiUntilMs = System.currentTimeMillis() + 2000;
-		if (!ClientPlayNetworking.canSend(MyFirstFabricMod.AudioPayloadC2S.ID)) {
+		if (!ClientPlayNetworking.canSend(GeminiCompanion.AudioPayloadC2S.ID)) {
 			voiceUiLabel = "Server missing voice support";
 			voiceUiUntilMs = System.currentTimeMillis() + 2000;
 			return;
 		}
-		ClientPlayNetworking.send(new MyFirstFabricMod.AudioPayloadC2S("audio/wav", wav));
+		ClientPlayNetworking.send(new GeminiCompanion.AudioPayloadC2S("audio/wav", wav));
+	}
+
+	private void sendVoiceState(String state) {
+		if (!ClientPlayNetworking.canSend(GeminiCompanion.VoiceStatePayloadC2S.ID)) {
+			return;
+		}
+		ClientPlayNetworking.send(new GeminiCompanion.VoiceStatePayloadC2S(state));
 	}
 
 	private byte[] toWav(byte[] pcm, AudioFormat format) throws IOException {
@@ -408,12 +418,15 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 		private TextFieldWidget serverKeyField;
 		private final List<ClickableWidget> baseWidgets = new ArrayList<>();
 		private final Map<ButtonWidget, ButtonStyle> buttonStyles = new HashMap<>();
-		private final List<ButtonWidget> micOptionButtons = new ArrayList<>();
+		private final List<String> micDropdownItems = new ArrayList<>();
 		private List<String> micDevices = new ArrayList<>();
 		private boolean micDropdownOpen;
 		private int micDropdownX;
 		private int micDropdownY;
 		private int micDropdownWidth;
+		private int micDropdownHeight;
+		private int lastMouseX;
+		private int lastMouseY;
 
 		private ChatConfigScreen() {
 			super(Text.literal("Chat AI Config"));
@@ -584,12 +597,8 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 			if (micDropdownOpen) {
 				refreshMicDevices();
 				buildMicDropdownButtons();
-				setBaseWidgetsVisible(false);
-				micButton.visible = true;
-				micButton.active = true;
 			} else {
-				hideMicDropdownButtons();
-				setBaseWidgetsVisible(true);
+				clearMicDropdown();
 			}
 		}
 
@@ -602,38 +611,27 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 		}
 
 		private void buildMicDropdownButtons() {
-			hideMicDropdownButtons();
+			clearMicDropdown();
 			int maxItems = 8;
-			List<String> display = new ArrayList<>();
-			display.add("Default");
+			micDropdownItems.add("Default");
 			for (String device : micDevices) {
-				if (display.size() >= maxItems) {
+				if (micDropdownItems.size() >= maxItems) {
 					break;
 				}
-				display.add(device);
+				micDropdownItems.add(device);
 			}
 			micDropdownWidth = BUTTON_WIDTH;
 			micDropdownX = micButton.getX();
-			int height = display.size() * (BUTTON_HEIGHT + 2) + 4;
+			micDropdownHeight = micDropdownItems.size() * (BUTTON_HEIGHT + 2) + 4;
 			int belowY = micButton.getY() + BUTTON_HEIGHT + 4;
-			int aboveY = micButton.getY() - height - 4;
+			int aboveY = micButton.getY() - micDropdownHeight - 4;
 			int panelBottom = panelY + PANEL_HEIGHT - 40;
-			micDropdownY = (belowY + height <= panelBottom) ? belowY : Math.max(panelY + 20, aboveY);
-			int y = micDropdownY;
-			for (String device : display) {
-				String label = shortenLabel(device, 18);
-				ButtonWidget button = addSmallStyledButton(micDropdownX, y, micDropdownWidth, label, () -> selectMicrophone(device), ButtonStyle.ACTION);
-				micOptionButtons.add(button);
-				y += BUTTON_HEIGHT + 2;
-			}
+			micDropdownY = (belowY + micDropdownHeight <= panelBottom) ? belowY : Math.max(panelY + 20, aboveY);
 		}
 
-		private void hideMicDropdownButtons() {
-			for (ButtonWidget button : micOptionButtons) {
-				button.visible = false;
-				button.active = false;
-			}
-			micOptionButtons.clear();
+		private void clearMicDropdown() {
+			micDropdownItems.clear();
+			micDropdownHeight = 0;
 		}
 
 		private void selectMicrophone(String device) {
@@ -645,8 +643,7 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 			saveClientConfig();
 			showToast("Mic set");
 			micDropdownOpen = false;
-			hideMicDropdownButtons();
-			setBaseWidgetsVisible(true);
+			clearMicDropdown();
 			refreshFromState();
 		}
 
@@ -671,13 +668,13 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 		}
 
 		private void sendConfigUpdate(int type, java.util.function.Consumer<JsonObject> writer) {
-			if (!ClientPlayNetworking.canSend(MyFirstFabricMod.ConfigPayloadC2S.ID)) {
+			if (!ClientPlayNetworking.canSend(GeminiCompanion.ConfigPayloadC2S.ID)) {
 				return;
 			}
 			JsonObject obj = new JsonObject();
 			obj.addProperty("type", type);
 			writer.accept(obj);
-			ClientPlayNetworking.send(new MyFirstFabricMod.ConfigPayloadC2S(obj.toString()));
+			ClientPlayNetworking.send(new GeminiCompanion.ConfigPayloadC2S(obj.toString()));
 		}
 
 		private void refreshFromState() {
@@ -718,6 +715,8 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 
 		@Override
 		public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+			lastMouseX = mouseX;
+			lastMouseY = mouseY;
 			renderBackground(context, mouseX, mouseY, delta);
 			long now = System.currentTimeMillis();
 			float progress = Math.min(1f, (now - openTimeMs) / (float) ANIM_DURATION_MS);
@@ -734,39 +733,56 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 			drawKeyStatus(context);
 			drawToast(context, now);
 			drawButtonStyles(context);
-			drawMicDropdownBackdrop(context);
 			super.render(context, mouseX, mouseY, delta);
+			drawMicDropdownBackdrop(context);
 		}
 
 		private void drawMicDropdownBackdrop(DrawContext context) {
-			if (!micDropdownOpen || micOptionButtons.isEmpty()) {
+			if (!micDropdownOpen || micDropdownItems.isEmpty()) {
 				return;
 			}
-			int height = micOptionButtons.size() * (BUTTON_HEIGHT + 2) + 4;
-			context.fill(micDropdownX - 2, micDropdownY - 2, micDropdownX + micDropdownWidth + 2, micDropdownY + height, 0xCC101A2B);
-			context.drawBorder(micDropdownX - 2, micDropdownY - 2, micDropdownWidth + 4, height + 2, 0xFF2E3A52);
+			context.getMatrices().push();
+			context.getMatrices().translate(0, 0, 200);
+			context.fill(micDropdownX - 4, micDropdownY - 4, micDropdownX + micDropdownWidth + 4, micDropdownY + micDropdownHeight + 2, 0xFF0F1622);
+			context.drawBorder(micDropdownX - 4, micDropdownY - 4, micDropdownWidth + 8, micDropdownHeight + 6, 0xFF2E3A52);
+			int y = micDropdownY;
+			for (int i = 0; i < micDropdownItems.size(); i++) {
+				String device = micDropdownItems.get(i);
+				String label = shortenLabel(device, 18);
+				boolean hover = mouseOverRect(micDropdownX, y, micDropdownWidth, BUTTON_HEIGHT, lastMouseX, lastMouseY);
+				int fill = hover ? 0xFF2D3A5A : 0xFF1E2736;
+				context.fill(micDropdownX, y, micDropdownX + micDropdownWidth, y + BUTTON_HEIGHT, fill);
+				context.drawBorder(micDropdownX, y, micDropdownWidth, BUTTON_HEIGHT, 0xFF3D4A7A);
+				context.drawTextWithShadow(textRenderer, Text.literal(label), micDropdownX + 8, y + 6, 0xFFE6EAF2);
+				y += BUTTON_HEIGHT + 2;
+			}
+			context.getMatrices().pop();
 		}
 
 		@Override
 		public boolean mouseClicked(double mouseX, double mouseY, int button) {
-			boolean handled = super.mouseClicked(mouseX, mouseY, button);
 			if (micDropdownOpen) {
 				boolean inside = mouseX >= micDropdownX - 4
 					&& mouseX <= micDropdownX + micDropdownWidth + 4
 					&& mouseY >= micDropdownY - 4
-					&& mouseY <= micDropdownY + (micOptionButtons.size() * (BUTTON_HEIGHT + 2)) + 4;
+					&& mouseY <= micDropdownY + micDropdownHeight + 4;
 				boolean onMicButton = micButton != null
 					&& mouseX >= micButton.getX()
 					&& mouseX <= micButton.getX() + micButton.getWidth()
 					&& mouseY >= micButton.getY()
 					&& mouseY <= micButton.getY() + micButton.getHeight();
-				if (!inside && !onMicButton) {
-					micDropdownOpen = false;
-					hideMicDropdownButtons();
-					setBaseWidgetsVisible(true);
+				if (inside) {
+					handleMicDropdownClick(mouseX, mouseY);
+					return true;
 				}
+				if (!onMicButton) {
+					micDropdownOpen = false;
+					clearMicDropdown();
+					return true;
+				}
+				return super.mouseClicked(mouseX, mouseY, button);
 			}
-			return handled;
+			return super.mouseClicked(mouseX, mouseY, button);
 		}
 
 		private void registerBaseWidget(ClickableWidget widget) {
@@ -784,6 +800,22 @@ public class MyFirstFabricModClient implements ClientModInitializer {
 				widget.visible = visible;
 				widget.active = visible;
 			}
+		}
+
+		private void handleMicDropdownClick(double mouseX, double mouseY) {
+			int y = micDropdownY;
+			for (String device : micDropdownItems) {
+				if (mouseX >= micDropdownX && mouseX <= micDropdownX + micDropdownWidth
+					&& mouseY >= y && mouseY <= y + BUTTON_HEIGHT) {
+					selectMicrophone(device);
+					return;
+				}
+				y += BUTTON_HEIGHT + 2;
+			}
+		}
+
+		private boolean mouseOverRect(int x, int y, int width, int height, int mouseX, int mouseY) {
+			return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
 		}
 
 		private String shortenLabel(String label, int max) {

@@ -16,16 +16,16 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"aaron.myfirstmod.MyFirstFabricMod"
+			"com.aaron.gemini.GeminiCompanion"
 		],
 		"client": [
-			"aaron.myfirstmod.MyFirstFabricModClient"
+			"com.aaron.gemini.GeminiCompanionClient"
 		]
 	},
 	"mixins": [
-		"my-first-fabric-mod.mixins.json",
+		"gemini-ai-companion.mixins.json",
 		{
-			"config": "my-first-fabric-mod.client.mixins.json",
+			"config": "gemini-ai-companion.client.mixins.json",
 			"environment": "client"
 		}
 	],

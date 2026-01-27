@@ -1,4 +1,4 @@
-package aaron.myfirstmod;
+package com.aaron.gemini;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -92,11 +92,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Base64;
 
-public class MyFirstFabricMod implements ModInitializer {
+public class GeminiCompanion implements ModInitializer {
 public static final String MOD_ID = "gemini-ai-companion";
 	public static final Identifier CONFIG_PACKET_C2S = Identifier.of(MOD_ID, "config_c2s");
 	public static final Identifier CONFIG_PACKET_S2C = Identifier.of(MOD_ID, "config_s2c");
 	public static final Identifier AUDIO_PACKET_C2S = Identifier.of(MOD_ID, "audio_c2s");
+	public static final Identifier VOICE_STATE_C2S = Identifier.of(MOD_ID, "voice_state_c2s");
 	private static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 	private static final String API_KEY_ENV = "GEMINI_API_KEY";
 	private static final String GEMINI_ENDPOINT_BASE =
@@ -122,6 +123,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 	private static final Map<UUID, Integer> SEARCHING_TICKS = new ConcurrentHashMap<>();
 	private static final Map<UUID, ModeState> MODE_STATE = new ConcurrentHashMap<>();
 	private static final Map<UUID, StatusState> STATUS_STATE = new ConcurrentHashMap<>();
+	private static final Map<UUID, String> VOICE_STATE = new ConcurrentHashMap<>();
 	private static final Map<UUID, List<ChatTurn>> CHAT_HISTORY = new ConcurrentHashMap<>();
 	private static final Map<UUID, String> API_KEYS = new ConcurrentHashMap<>();
 	private static final Map<UUID, List<DeathRecord>> DEATHS = new ConcurrentHashMap<>();
@@ -344,6 +346,18 @@ public static final String MOD_ID = "gemini-ai-companion";
 
 			for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
 				UUID id = player.getUuid();
+				String voice = VOICE_STATE.get(id);
+				if (voice != null) {
+					AiStats stats = getStats(id);
+					stats.state = voice;
+					updateSidebar(player, stats);
+					if ("LISTENING".equals(voice)) {
+						player.sendMessage(Text.literal("Listening...").formatted(Formatting.AQUA), true);
+					} else if ("TRANSCRIBING".equals(voice)) {
+						player.sendMessage(Text.literal("Transcribing...").formatted(Formatting.AQUA), true);
+					}
+					continue;
+				}
 				StatusState status = STATUS_STATE.get(id);
 				if (status != null) {
 					AiStats stats = getStats(id);
@@ -413,11 +427,15 @@ public static final String MOD_ID = "gemini-ai-companion";
 		PayloadTypeRegistry.playC2S().register(ConfigPayloadC2S.ID, ConfigPayloadC2S.CODEC);
 		PayloadTypeRegistry.playS2C().register(ConfigPayloadS2C.ID, ConfigPayloadS2C.CODEC);
 		PayloadTypeRegistry.playC2S().register(AudioPayloadC2S.ID, AudioPayloadC2S.CODEC);
+		PayloadTypeRegistry.playC2S().register(VoiceStatePayloadC2S.ID, VoiceStatePayloadC2S.CODEC);
 		ServerPlayNetworking.registerGlobalReceiver(ConfigPayloadC2S.ID, (payload, context) -> {
 			handleConfigPacket(context.server(), context.player(), payload.json());
 		});
 		ServerPlayNetworking.registerGlobalReceiver(AudioPayloadC2S.ID, (payload, context) -> {
 			context.server().execute(() -> handleVoicePayload(context.player(), payload));
+		});
+		ServerPlayNetworking.registerGlobalReceiver(VoiceStatePayloadC2S.ID, (payload, context) -> {
+			context.server().execute(() -> handleVoiceState(context.player(), payload));
 		});
 	}
 
@@ -472,11 +490,25 @@ public static final String MOD_ID = "gemini-ai-companion";
 		THINKING_TICKS.put(player.getUuid(), 0);
 		registerRequest(player.getUuid());
 		sendCancelPrompt(player);
-		setStatus(player, "Transcribing voice...", Formatting.AQUA);
+		VOICE_STATE.put(player.getUuid(), "TRANSCRIBING");
 		CompletableFuture<Void> future = CompletableFuture.runAsync(() -> handleVoiceFlow(player, apiKey, payload));
 		RequestState state = REQUEST_STATES.get(player.getUuid());
 		if (state != null) {
 			state.future = future;
+		}
+	}
+
+	private static void handleVoiceState(ServerPlayerEntity player, VoiceStatePayloadC2S payload) {
+		if (player == null || payload == null) {
+			return;
+		}
+		String state = payload.state() == null ? "" : payload.state().toUpperCase(Locale.ROOT);
+		if ("LISTENING".equals(state)) {
+			VOICE_STATE.put(player.getUuid(), "LISTENING");
+			return;
+		}
+		if ("IDLE".equals(state)) {
+			VOICE_STATE.remove(player.getUuid());
 		}
 	}
 
@@ -493,6 +525,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 				player.sendMessage(Text.literal("Voice transcription failed: " + e.getMessage()), false);
 				THINKING_TICKS.remove(player.getUuid());
 				STATUS_STATE.remove(player.getUuid());
+				VOICE_STATE.remove(player.getUuid());
 			});
 			return;
 		}
@@ -505,9 +538,11 @@ public static final String MOD_ID = "gemini-ai-companion";
 				player.sendMessage(Text.literal("Could not hear any speech. Try again."), false);
 				THINKING_TICKS.remove(player.getUuid());
 				STATUS_STATE.remove(player.getUuid());
+				VOICE_STATE.remove(player.getUuid());
 			});
 			return;
 		}
+		VOICE_STATE.remove(player.getUuid());
 		LAST_PROMPT.put(player.getUuid(), cleaned);
 		player.getServer().execute(() -> player.sendMessage(Text.literal("You (voice): " + cleaned).formatted(Formatting.GRAY), false));
 		boolean inventoryQuery = isInventoryQuery(cleaned);
@@ -1142,6 +1177,17 @@ public static final String MOD_ID = "gemini-ai-companion";
 		}
 	}
 
+	public record VoiceStatePayloadC2S(String state) implements CustomPayload {
+		public static final Id<VoiceStatePayloadC2S> ID = new Id<>(VOICE_STATE_C2S);
+		public static final PacketCodec<RegistryByteBuf, VoiceStatePayloadC2S> CODEC =
+			PacketCodec.tuple(PacketCodecs.STRING, VoiceStatePayloadC2S::state, VoiceStatePayloadC2S::new);
+
+		@Override
+		public Id<? extends CustomPayload> getId() {
+			return ID;
+		}
+	}
+
 	private static int showChatHelp(ServerCommandSource source, String topic) {
 		if (topic == null || topic.isBlank()) {
 			source.sendFeedback(() -> Text.literal("Chat AI Help:"), false);
@@ -1266,7 +1312,23 @@ public static final String MOD_ID = "gemini-ai-companion";
 			}
 		}
 
+		final boolean[] planAlreadySent = new boolean[] { false };
 		if ("PLAN".equals(reply.mode) && player != null) {
+			ModeMessage planSnapshot = reply;
+			source.getServer().execute(() -> {
+				if (state != null && state.cancelled.get()) {
+					return;
+				}
+				MutableText prefix = Text.literal("[PLAN] ").formatted(modeColor("PLAN"));
+				source.sendFeedback(() -> prefix.append(Text.literal(planSnapshot.message)), false);
+				MODE_STATE.put(player.getUuid(), new ModeState(modeLabel("PLAN"), modeColor("PLAN"), 60));
+				AiStats stats = getStats(player.getUuid());
+				stats.mode = "PLAN";
+				stats.state = "PLANNING";
+				updateSidebar(player, stats);
+			});
+			setStatus(player, "Iterating on the plan...", Formatting.AQUA);
+			planAlreadySent[0] = true;
 			String planInstruction =
 				"Convert the plan above into COMMAND mode. Return mode COMMAND, message \"Initiating plan.\", and commands array only. " +
 				"Plan: " + reply.message;
@@ -1300,6 +1362,9 @@ public static final String MOD_ID = "gemini-ai-companion";
 				stats.lastResponseMs = elapsedMs;
 				stats.recordResponseTime(elapsedMs);
 				stats.state = finalReply.searchUsed ? "SEARCHING" : resolveState(finalReply.message);
+				if (planAlreadySent[0] && "COMMAND".equals(finalReply.mode)) {
+					stats.state = "EXECUTING";
+				}
 				stats.contextSize = history.size();
 				stats.tokenPercent = estimateTokenPercent(contextForStats, history, prompt);
 				if (!finalReply.message.startsWith("Error:")) {
@@ -1311,25 +1376,28 @@ public static final String MOD_ID = "gemini-ai-companion";
 			if (finalReply.message.startsWith("Error:")) {
 				source.sendError(Text.literal(finalReply.message));
 			} else {
-				MutableText message = Text.literal(finalReply.message);
-				if (finalReply.mode.equals("ASK")) {
-					source.sendFeedback(() -> message, false);
-				} else {
-					MutableText prefix = Text.literal("[" + finalReply.mode + "] ").formatted(modeColor(finalReply.mode));
-					source.sendFeedback(() -> prefix.append(message), false);
-					if (finalReply.mode.equals("COMMAND") && shouldShowCommandDebug(player)
-						&& finalReply.commands != null && !finalReply.commands.isEmpty()) {
-						List<String> filtered = filterSkillCommands(finalReply.commands);
-						if (!filtered.isEmpty()) {
-							String commandText = String.join(" | ", filtered);
-							MutableText commandLine = Text.literal("Commands: " + commandText).formatted(Formatting.DARK_GRAY);
-							source.sendFeedback(() -> commandLine, false);
-						}
-						List<String> outputLines = getStats(player.getUuid()).lastCommandOutput;
-						if (outputLines != null && !outputLines.isEmpty()) {
-							String outputText = String.join(" | ", outputLines);
-							MutableText outputLine = Text.literal("Output: " + outputText).formatted(Formatting.DARK_GRAY);
-							source.sendFeedback(() -> outputLine, false);
+				boolean skipMessage = planAlreadySent[0] && "PLAN".equals(finalReply.mode);
+				if (!skipMessage) {
+					MutableText message = Text.literal(finalReply.message);
+					if (finalReply.mode.equals("ASK")) {
+						source.sendFeedback(() -> message, false);
+					} else {
+						MutableText prefix = Text.literal("[" + finalReply.mode + "] ").formatted(modeColor(finalReply.mode));
+						source.sendFeedback(() -> prefix.append(message), false);
+						if (finalReply.mode.equals("COMMAND") && shouldShowCommandDebug(player)
+							&& finalReply.commands != null && !finalReply.commands.isEmpty()) {
+							List<String> filtered = filterSkillCommands(finalReply.commands);
+							if (!filtered.isEmpty()) {
+								String commandText = String.join(" | ", filtered);
+								MutableText commandLine = Text.literal("Commands: " + commandText).formatted(Formatting.DARK_GRAY);
+								source.sendFeedback(() -> commandLine, false);
+							}
+							List<String> outputLines = getStats(player.getUuid()).lastCommandOutput;
+							if (outputLines != null && !outputLines.isEmpty()) {
+								String outputText = String.join(" | ", outputLines);
+								MutableText outputLine = Text.literal("Output: " + outputText).formatted(Formatting.DARK_GRAY);
+								source.sendFeedback(() -> outputLine, false);
+							}
 						}
 					}
 				}

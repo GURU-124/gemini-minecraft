@@ -1,4 +1,4 @@
-package aaron.myfirstmod.mixin.client;
+package com.aaron.gemini.mixin.client;
 
 import net.minecraft.client.MinecraftClient;
 import org.spongepowered.asm.mixin.Mixin;

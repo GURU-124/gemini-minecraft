@@ -22,7 +22,7 @@ loom {
 	splitEnvironmentSourceSets()
 
 	mods {
-		"my-first-fabric-mod" {
+		"gemini-ai-companion" {
 			sourceSet sourceSets.main
 			sourceSet sourceSets.client
 		}

@@ -1,6 +1,6 @@
 {
 	"required": true,
-	"package": "aaron.myfirstmod.mixin.client",
+	"package": "com.aaron.gemini.mixin.client",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
 		"ExampleClientMixin"

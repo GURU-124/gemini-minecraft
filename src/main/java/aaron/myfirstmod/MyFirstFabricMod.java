@@ -50,6 +50,7 @@ import net.minecraft.recipe.RecipeEntry;
 import net.minecraft.recipe.RecipeManager;
 import net.minecraft.recipe.RecipeType;
 import net.minecraft.recipe.Recipe;
+import net.minecraft.recipe.Ingredient;
 import net.minecraft.world.gen.StructureAccessor;
 import net.minecraft.world.gen.structure.Structure;
 import net.minecraft.util.Identifier;
@@ -106,6 +107,8 @@ public static final String MOD_ID = "gemini-ai-companion";
 		"You can access the full player inventory context when it is provided; do not claim you lack inventory access. " +
 		"If you are unsure about the player's items or equipment, proactively issue /chat skill inventory before answering. " +
 		"If you need extra data, you may issue /chat skill inventory, /chat skill nearby, /chat skill stats, or /chat skill nbt <mainhand|offhand|slot N>. " +
+		"/chat skill recipe <item> returns all matching recipes across vanilla and modded recipe types with ingredients. " +
+		"/chat skill smelt <item> returns cooking recipes only. " +
 		"After skill output is returned, continue the task using that data. " +
 		"Minecraft version rules: Items use COMPONENTS, not old NBT. " +
 		"Enchantments use: enchantments={levels:{\"minecraft:enchantment\":level}}. " +
@@ -1509,15 +1512,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 
 		RecipeManager manager = player.getServerWorld().getRecipeManager();
 		List<String> results = new ArrayList<>();
-		if (!smeltOnly) {
-			collectRecipesForType(manager, outputStack, RecipeType.CRAFTING, "crafting", results);
-			collectRecipesForType(manager, outputStack, RecipeType.STONECUTTING, "stonecutting", results);
-			collectRecipesForType(manager, outputStack, RecipeType.SMITHING, "smithing", results);
-		}
-		collectRecipesForType(manager, outputStack, RecipeType.SMELTING, "smelting", results);
-		collectRecipesForType(manager, outputStack, RecipeType.BLASTING, "blasting", results);
-		collectRecipesForType(manager, outputStack, RecipeType.SMOKING, "smoking", results);
-		collectRecipesForType(manager, outputStack, RecipeType.CAMPFIRE_COOKING, "campfire", results);
+		collectRecipesForAllTypes(manager, player, outputStack, smeltOnly, results);
 
 		if (results.isEmpty()) {
 			return "Recipes for " + itemToken + ": none found";
@@ -1525,25 +1520,99 @@ public static final String MOD_ID = "gemini-ai-companion";
 		return "Recipes for " + itemToken + ": " + String.join(" | ", results);
 	}
 
-	private static void collectRecipesForType(RecipeManager manager, ItemStack outputStack, RecipeType<?> type, String label, List<String> results) {
-		try {
-			List<RecipeEntry<?>> entries = manager.listAllOfType(type);
-			for (RecipeEntry<?> entry : entries) {
-				Recipe<?> recipe = entry.value();
-				ItemStack result = recipe.getResult(manager.getRegistryManager());
-				if (result == null || result.isEmpty()) {
-					continue;
-				}
-				if (result.getItem() == outputStack.getItem()) {
-					results.add(label + ":" + entry.id().toString());
-					if (results.size() >= 8) {
-						return;
+	private static void collectRecipesForAllTypes(RecipeManager manager, ServerPlayerEntity player, ItemStack outputStack, boolean smeltOnly, List<String> results) {
+		for (RecipeType<?> type : Registries.RECIPE_TYPE) {
+			String typeId = Registries.RECIPE_TYPE.getId(type).toString();
+			if (smeltOnly && !isCookingType(typeId)) {
+				continue;
+			}
+			try {
+				List<RecipeEntry<?>> entries = new ArrayList<>(manager.values());
+				for (RecipeEntry<?> entry : entries) {
+					if (entry == null || entry.value() == null || entry.value().getType() != type) {
+						continue;
+					}
+					Recipe<?> recipe = entry.value();
+					ItemStack result = recipe.getResult(player.getRegistryManager());
+					if (result == null || result.isEmpty()) {
+						continue;
+					}
+					if (result.getItem() == outputStack.getItem()) {
+						results.add(formatRecipeEntry(typeId, entry, recipe, player));
+						if (results.size() >= 10) {
+							return;
+						}
 					}
 				}
+			} catch (Exception e) {
+				// ignore recipe type if unavailable
 			}
-		} catch (Exception e) {
-			// ignore recipe type if unavailable
 		}
+	}
+
+	private static boolean isCookingType(String typeId) {
+		if (typeId == null) {
+			return false;
+		}
+		String lower = typeId.toLowerCase(Locale.ROOT);
+		return lower.contains("smelting")
+			|| lower.contains("blasting")
+			|| lower.contains("smoking")
+			|| lower.contains("campfire");
+	}
+
+	private static String formatRecipeEntry(String typeId, RecipeEntry<?> entry, Recipe<?> recipe, ServerPlayerEntity player) {
+		ItemStack result = recipe.getResult(player.getRegistryManager());
+		String resultId = Registries.ITEM.getId(result.getItem()).toString();
+		int count = result.getCount();
+		String ingredients = formatIngredients(recipe);
+		return typeId + ":" + entry.id().toString() + " -> " + resultId + " x" + count + " [" + ingredients + "]";
+	}
+
+	private static String formatIngredients(Recipe<?> recipe) {
+		List<Ingredient> ingredients = recipe.getIngredients();
+		if (ingredients == null || ingredients.isEmpty()) {
+			return "no-ingredients";
+		}
+		List<String> parts = new ArrayList<>();
+		for (Ingredient ingredient : ingredients) {
+			String label = formatIngredient(ingredient);
+			if (!label.isBlank()) {
+				parts.add(label);
+			}
+			if (parts.size() >= 9) {
+				break;
+			}
+		}
+		return parts.isEmpty() ? "no-ingredients" : String.join(", ", parts);
+	}
+
+	private static String formatIngredient(Ingredient ingredient) {
+		if (ingredient == null) {
+			return "";
+		}
+		ItemStack[] stacks = ingredient.getMatchingStacks();
+		if (stacks == null || stacks.length == 0) {
+			return "empty";
+		}
+		List<String> ids = new ArrayList<>();
+		for (ItemStack stack : stacks) {
+			if (stack == null || stack.isEmpty()) {
+				continue;
+			}
+			ids.add(Registries.ITEM.getId(stack.getItem()).toString());
+			if (ids.size() >= 3) {
+				break;
+			}
+		}
+		if (ids.isEmpty()) {
+			return "empty";
+		}
+		String joined = String.join("/", ids);
+		if (stacks.length > ids.size()) {
+			joined += "/+" + (stacks.length - ids.size());
+		}
+		return joined;
 	}
 
 	private static ItemStack resolveItemStack(String token) {

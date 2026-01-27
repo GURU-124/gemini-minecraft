@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" width="800" />
+  <img src="readme_resources/banner.png" width="800" />
 </p>
 
 <h1 align="center">🌌 Gemini AI Companion</h1>
@@ -26,7 +26,7 @@
 <h2 align="center">🎬 See It In Action</h2>
 
 <p align="center">
-  <img src="assets/demo.gif" width="750">
+  <img src="readme_resources/demo.gif" width="750">
   <br>
   <i>▲ Real-time command execution and natural language reasoning</i>
 </p>
@@ -35,7 +35,7 @@
 <details>
 <summary>📸 <b>Click to View Screenshots</b></summary>
 <br>
-<img src="assets/thinking.png" width="750">
+<img src="readme_resources/thinking.png" width="750">
 <br>
 <i>▲ The rainbow "Thinking..." animation in action while AI processes your request</i>
 </details>

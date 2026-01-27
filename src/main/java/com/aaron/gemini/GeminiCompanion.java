@@ -476,15 +476,18 @@ public static final String MOD_ID = "gemini-ai-companion";
 		String apiKey = resolveApiKey(player.getCommandSource());
 		if (apiKey == null || apiKey.isBlank()) {
 			player.sendMessage(Text.literal("No API key set. Use /chatkey <key> or /chatkey default <key>."), false);
+			VOICE_STATE.remove(player.getUuid());
 			return;
 		}
 		byte[] audio = payload.data();
 		if (audio == null || audio.length == 0) {
 			player.sendMessage(Text.literal("No audio received."), false);
+			VOICE_STATE.remove(player.getUuid());
 			return;
 		}
 		if (audio.length > MAX_VOICE_BYTES) {
 			player.sendMessage(Text.literal("Voice clip too large. Try a shorter clip."), false);
+			VOICE_STATE.remove(player.getUuid());
 			return;
 		}
 		THINKING_TICKS.put(player.getUuid(), 0);

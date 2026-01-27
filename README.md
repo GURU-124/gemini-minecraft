@@ -1,12 +1,14 @@
 <div align="center">
 
+![Gemini AI Companion](banner.png)
+
 # 🤖 Gemini AI Companion
 
 ### Talk to Minecraft. AI Understands.
 
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.21.1-62B47A?style=for-the-badge&logo=minecraft&logoColor=white)](https://minecraft.net)
 [![Fabric](https://img.shields.io/badge/Fabric-Mod-DFD4BC?style=for-the-badge)](https://fabricmc.net)
-[![Gemini](https://img.shields.io/badge/Powered%20by-Gemini%20AI-8E75B2?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
+[![Gemini](https://img.shields.io/badge/Powered%20by-Gemini%203-8E75B2?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
 **The most powerful AI mod for Minecraft. Ask questions, execute commands, and control your game using natural language.**
@@ -17,6 +19,31 @@
 [Configuration](#%EF%B8%8F-configuration)
 
 </div>
+
+---
+
+## 🎬 See It In Action
+
+<div align="center">
+
+![Demo](merged_output_5mb.gif)
+
+*Ask anything, execute anything — powered by Gemini 3*
+
+</div>
+
+<details>
+<summary>📸 <strong>Screenshots</strong></summary>
+
+<div align="center">
+
+|         AI Thinking          |      Live Sidebar       |
+| :--------------------------: | :---------------------: |
+| ![Thinking](Thinking....png) | Real-time stats display |
+
+</div>
+
+</details>
 
 ---
 

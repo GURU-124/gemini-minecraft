@@ -54,6 +54,25 @@
   <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/rainbow.png" />
 </p>
 
+<h2 align="center">🧠 Smart Context Awareness</h2>
+
+<p align="center">The AI doesn't just "chat" — it perceives your world in real-time.</p>
+
+<table align="center">
+<tr>
+<td align="center" width="50%">🏰<br><b>Structure Detection</b><br>AI knows if you're in a Village, Stronghold, or Ancient City automatically.</td>
+<td align="center" width="50%">💀<br><b>Death History</b><br>Lost your items? AI remembers where you died and can help you get back.</td>
+</tr>
+<tr>
+<td align="center" width="50%">⛅<br><b>Environmental Sync</b><br>Aware of time, weather, and dimension without being asked.</td>
+<td align="center" width="50%">🎒<br><b>Selective Context</b><br>Inventory data is only sent when needed (crafting/tools) to keep responses fast.</td>
+</tr>
+</table>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/rainbow.png" />
+</p>
+
 <h2 align="center">🚀 Getting Started</h2>
 
 ### 🛠️ Prerequisites

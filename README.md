@@ -21,6 +21,20 @@
 
 </div>
 
+## ⚡ Quick Try
+
+1.  **Download** the latest release: [**v1.0.0 JAR**](https://github.com/aaronaalmendarez/gemini-minecraft/releases/tag/v1.0.0)
+2.  Drop the `.jar` into your **`mods`** folder.
+3.  Launch with **Fabric 1.21.1**.
+4.  **Experience the Power**:
+    *   🎙️ **Hold `V`** and speak naturally (Push-to-Talk).
+    *   💬 Type `/chat <your message>` in game.
+
+> *“Build me a small house”*  
+> *“Find the nearest village”*
+
+---
+
 ## 💎 Pillars of Intelligence
 
 Gemini AI Companion isn't just a chatbot. It's a suite of integrated systems that give the AI true digital agency.

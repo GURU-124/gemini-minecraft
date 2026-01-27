@@ -11,7 +11,7 @@
 [![Official Release](https://img.shields.io/badge/Release-v1.0.0_Official-purple?style=for-the-badge)](https://github.com/aaronaalmendarez/gemini-minecraft/releases/tag/v1.0.0)
 [![MIT License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-[**Quick Start**](#🚀-getting-started) • [**Features**](#💎-pillars-of-intelligence) • [**Commands**](#📟-command-terminal) • [**Technical Specs**](#🛠️-the-nerd-stack)
+[**Quick Start**](#-getting-started) • [**Features**](#-pillars-of-intelligence) • [**Commands**](#-command-terminal) • [**Technical Specs**](#-the-nerd-stack)
 
 ---
 

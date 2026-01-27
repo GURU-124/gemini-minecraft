@@ -37,9 +37,9 @@
 
 <div align="center">
 
-|         AI Thinking          |      Live Sidebar       |
-| :--------------------------: | :---------------------: |
-| ![Thinking](Thinking....png) | Real-time stats display |
+|         AI Thinking          |
+| :--------------------------: |
+| ![Thinking](Thinking....png) |
 
 </div>
 
@@ -55,7 +55,6 @@
 | 🧠 **Three AI Modes**            | ASK (questions), PLAN (strategies), COMMAND (execute actions)                       |
 | 🔄 **Self-Healing Commands**     | AI automatically fixes and retries failed commands up to 10 times                   |
 | 🌐 **Web Search**                | AI can search the web for Minecraft info using Google Grounding                     |
-| 📊 **Live Sidebar**              | Real-time stats: tokens used, response time, current mode                           |
 | ↩️ **Undo Support**              | Made a mistake? `/chat undo` reverses the last AI actions                           |
 | 💾 **Chat History**              | Export conversations to TXT or JSON                                                 |
 | ⚙️ **In-Game Config GUI**        | Press `G` to open settings (keybind configurable)                                   |

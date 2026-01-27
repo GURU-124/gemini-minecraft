@@ -164,7 +164,7 @@ You can also set the `GEMINI_API_KEY` environment variable.
 
 - **Minecraft Version:** 1.21.1
 - **Mod Loader:** Fabric
-- **API:** Google Gemini (gemini-2.0-flash, gemini-2.0-pro)
+- **API:** Google Gemini (gemini-3.0-flash, gemini-3.0-pro)
 - **Commands:** Execute at OP level 4
 - **Data Storage:** `run/ai-keys/` (API keys), `run/chat-logs/` (exports)
 

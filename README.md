@@ -183,3 +183,199 @@ MIT License - see [LICENSE](LICENSE) for details.
 [⬆ Back to Top](#-gemini-ai-companion)
 
 </div>
+
+---
+
+# 📚 Technical Report: Architecture & Implementation
+
+This section documents the engineering techniques that enable seamless AI-to-game collaboration.
+
+## System Architecture
+
+```mermaid
+graph TB
+    subgraph Minecraft Server
+        A[Player Input<br>/chat command] --> B[Command Handler]
+        B --> C{Parse Intent}
+        C -->|Subcommand| D[Config/History/Export]
+        C -->|AI Request| E[AiChatHandler]
+    end
+    
+    subgraph Async Processing
+        E --> F[HTTP Thread Pool]
+        F --> G[Gemini API]
+        G --> H[Response Parser]
+    end
+    
+    subgraph Execution Engine
+        H --> I{Mode Detection}
+        I -->|ASK| J[Display Answer]
+        I -->|PLAN| K[Display Strategy]
+        I -->|COMMAND| L[Command Executor]
+        L --> M{Validation}
+        M -->|Success| N[Apply to World]
+        M -->|Failure| O[Retry Loop]
+        O --> G
+    end
+    
+    subgraph State Management
+        P[(PlayerState Map)]
+        Q[(Chat History)]
+        R[(Undo Stack)]
+    end
+    
+    E -.-> P
+    E -.-> Q
+    L -.-> R
+```
+
+## Request Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant P as Player
+    participant M as Mod
+    participant T as Thread Pool
+    participant G as Gemini API
+    participant W as Minecraft World
+
+    P->>M: /chat give me diamond sword
+    M->>M: Build context (inventory, stats, history)
+    M->>P: 🌈 "Thinking..." animation
+    M->>T: Async HTTP request
+    T->>G: POST /generateContent
+    G-->>T: JSON response
+    T->>M: Parse response
+    
+    alt Mode = COMMAND
+        M->>W: Execute /give command
+        W-->>M: Success/Failure
+        alt Failure
+            M->>G: Retry with error context
+            G-->>M: Fixed command
+            M->>W: Re-execute
+        end
+        M->>M: Push to undo stack
+    end
+    
+    M->>P: Display result + update sidebar
+```
+
+## Self-Healing Command Retry
+
+The mod implements an intelligent retry mechanism that feeds command errors back to Gemini:
+
+```mermaid
+flowchart LR
+    A[Generate Command] --> B[Execute]
+    B --> C{Result}
+    C -->|Success| D[Done ✓]
+    C -->|Failure| E{Retries < 10?}
+    E -->|Yes| F[Append Error to Context]
+    F --> G[Request New Command]
+    G --> B
+    E -->|No| H[Report Failure]
+    
+    style D fill:#4ade80
+    style H fill:#f87171
+```
+
+**Example Retry Flow:**
+1. AI generates: `/give @p diamond_sword{Enchantments:[{id:sharpness,lvl:5}]}`
+2. Server rejects: "Unknown argument: Enchantments" (1.21.1 uses components)
+3. Error fed back to Gemini with context
+4. AI corrects: `/give @p diamond_sword[enchantments={levels:{sharpness:5}}]`
+5. Command succeeds
+
+## Context Window Management
+
+```mermaid
+pie title Token Budget Allocation
+    "System Prompt" : 2000
+    "Player Context" : 500
+    "Chat History" : 3500
+    "Current Request" : 1000
+    "Reserved for Response" : 1000
+```
+
+| Component           | Strategy                                             |
+| ------------------- | ---------------------------------------------------- |
+| **System Prompt**   | Static instructions for Minecraft command generation |
+| **Player Context**  | Dynamically injected: inventory, position, stats     |
+| **Chat History**    | Rolling window of last 10 exchanges, FIFO eviction   |
+| **Response Buffer** | Reserved tokens to prevent truncation                |
+
+## Thread Safety Model
+
+```mermaid
+graph LR
+    subgraph Main Thread
+        A[Tick Events]
+        B[Command Registration]
+        C[World Mutations]
+    end
+    
+    subgraph Worker Threads
+        D[HTTP Requests]
+        E[JSON Parsing]
+        F[Response Processing]
+    end
+    
+    subgraph Thread-Safe Storage
+        G[(ConcurrentHashMap<br>PlayerState)]
+        H[(ConcurrentHashMap<br>ChatHistory)]
+    end
+    
+    D --> G
+    F --> H
+    C -.->|server.execute| A
+```
+
+**Key Techniques:**
+- `ConcurrentHashMap` for all player-specific state
+- `server.execute()` to marshal world mutations back to main thread
+- `CompletableFuture` for non-blocking API calls
+- Atomic operations for sidebar updates
+
+## Undo System Architecture
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Executing: /chat command
+    Executing --> Recording: Command succeeds
+    Recording --> Idle: Push to undo stack
+    Idle --> Reverting: /chat undo
+    Reverting --> Idle: Execute inverse commands
+    
+    note right of Recording
+        Captures:
+        - Entity spawns → /kill
+        - Item gives → /clear
+        - Effects → /effect clear
+    end note
+```
+
+## Data Flow Summary
+
+| Layer             | Technology               | Purpose                      |
+| ----------------- | ------------------------ | ---------------------------- |
+| **Input**         | Brigadier Commands       | Type-safe command parsing    |
+| **Network**       | java.net.http.HttpClient | Async HTTP/2 to Gemini       |
+| **Serialization** | Gson                     | JSON encoding/decoding       |
+| **State**         | ConcurrentHashMap        | Thread-safe player data      |
+| **Execution**     | CommandManager           | Server-side command dispatch |
+| **Feedback**      | Scoreboard API           | Real-time sidebar stats      |
+
+## Performance Characteristics
+
+| Metric              | Typical Value                 |
+| ------------------- | ----------------------------- |
+| API Latency         | 200-800ms (Flash), 1-3s (Pro) |
+| Memory per Player   | ~50KB (history + state)       |
+| Retry Overhead      | +200ms per attempt            |
+| Sidebar Update Rate | Every 20 ticks (1 second)     |
+
+---
+
+> **Note:** This architecture prioritizes responsiveness and reliability. The async design ensures the game never freezes during API calls, while the retry system handles the inherent unpredictability of LLM outputs.

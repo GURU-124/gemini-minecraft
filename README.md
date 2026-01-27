@@ -41,10 +41,6 @@
 </details>
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/rainbow.png" />
-</p>
-
 <h2 align="center">✨ Features</h2>
 
 <table align="center">
@@ -125,9 +121,7 @@
 - [ ] **Vision Support:** Image analysis for world snapshots (Planned)
 - [ ] **Voice Control:** Dictation-based command execution (Backlog)
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/rainbow.png" />
-</p>
+<br>
 
 <h2 align="center">📚 Technical Report: Architecture & Implementation</h2>
 

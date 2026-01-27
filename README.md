@@ -142,32 +142,40 @@ graph TB
         C -->|AI Request| E[AiChatHandler]
     end
     
+    subgraph Context Orchestration
+        E --> F[ContextBuilder]
+        F --> F1[Env Sync: Time/Weather]
+        F --> F2[Structure Detector]
+        F --> F3[Registry Scanner: RegistryHints]
+        F --> F4[Recipe Scraper: Crafting/Smelting]
+    end
+    
     subgraph Async Processing
-        E --> F[HTTP Thread Pool]
-        F --> G[Gemini API]
-        G --> H[Response Parser]
+        F --> G[HTTP Thread Pool]
+        G --> H[Gemini API]
+        H --> I[Response Parser]
     end
     
     subgraph Execution Engine
-        H --> I{Mode Detection}
-        I -->|ASK| J[Display Answer]
-        I -->|PLAN| K[Display Strategy]
-        I -->|COMMAND| L[Command Executor]
-        L --> M{Validation}
-        M -->|Success| N[Apply to World]
-        M -->|Failure| O[Retry Loop]
-        O --> G
+        I --> J{Mode Detection}
+        J -->|ASK| K[Display Answer]
+        J -->|PLAN| L[Display Strategy]
+        J -->|COMMAND| M[Command Executor]
+        M --> N{Validation}
+        N -->|Success| O[Apply to World]
+        N -->|Failure| P[Retry Loop]
+        P --> H
     end
     
-    subgraph State Management
-        P[(PlayerState Map)]
-        Q[(Chat History)]
-        R[(Undo Stack)]
+    subgraph Persistence Layer
+        Q[(PlayerState Map)]
+        R[(Chat History)]
+        S[(Undo Stack)]
     end
     
-    E -.-> P
     E -.-> Q
-    L -.-> R
+    E -.-> R
+    M -.-> S
 ```
 
 ### Request Lifecycle
@@ -176,12 +184,15 @@ graph TB
 sequenceDiagram
     participant P as Player
     participant M as Mod
+    participant R as Game Registry
     participant T as Thread Pool
     participant G as Gemini API
     participant W as Minecraft World
 
-    P->>M: /chat give me diamond sword
-    M->>M: Build context (inventory, stats, history)
+    P->>M: /chat how to make diamond sword?
+    M->>R: Scan Recipes (Crafting/Smelting)
+    M->>R: Pull RegistryHints (Meta/NBT)
+    M->>M: Build context (History, Env, Registry)
     M->>P: 🌈 "Thinking..." animation
     M->>T: Async HTTP request
     T->>G: POST /generateContent
@@ -199,7 +210,7 @@ sequenceDiagram
         M->>M: Push to undo stack
     end
     
-    M->>P: Display result + update sidebar
+    M->>P: Display detailed recipe + update sidebar
 ```
 
 ### Self-Healing Command Retry
@@ -242,7 +253,7 @@ pie title Token Budget Allocation
 | Component           | Strategy                                             |
 | ------------------- | ---------------------------------------------------- |
 | **System Prompt**   | Static instructions for Minecraft command generation |
-| **Player Context**  | Dynamically injected: inventory, position, stats     |
+| **Player Context**  | Dynamically injected: RegistryHints, Recipes, Stats  |
 | **Chat History**    | Rolling window of last 10 exchanges, FIFO eviction   |
 | **Response Buffer** | Reserved tokens to prevent truncation                |
 
@@ -253,6 +264,7 @@ graph LR
     subgraph Main Thread
         A[Tick Events]
         B[Command Registration]
+        B1[Registry & Recipe Lookups]
         C[World Mutations]
     end
     

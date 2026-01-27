@@ -281,4 +281,8 @@ The mod maintains strict separation between the **Netty Work Pool** (Networking)
 
 [**Download for Fabric**](https://fabricmc.net/) | [**Report a Bug**](https://github.com/aaronaalmendarez/gemini-minecraft/issues)
 
+---
+
+### *Built with ❤️ for the Minecraft Community*
+
 </div>

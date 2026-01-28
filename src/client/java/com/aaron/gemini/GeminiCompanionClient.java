@@ -14,11 +14,15 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.option.KeyBinding;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.util.InputUtil;
+import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import com.google.gson.JsonObject;
 import com.google.gson.Gson;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import org.lwjgl.glfw.GLFW;
 import javax.sound.sampled.AudioFileFormat;
 import javax.sound.sampled.AudioFormat;
@@ -27,6 +31,8 @@ import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.DataLine;
 import javax.sound.sampled.Mixer;
 import javax.sound.sampled.TargetDataLine;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.awt.Color;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -34,9 +40,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 
 public class GeminiCompanionClient implements ClientModInitializer {
 	private static final String KEY_CATEGORY = "key.categories.gemini_ai_companion";
@@ -49,6 +59,9 @@ public class GeminiCompanionClient implements ClientModInitializer {
 	private static final int VOICE_MAX_SECONDS = 30;
 	private static final int VOICE_MAX_BYTES = VOICE_SAMPLE_RATE * 2 * VOICE_MAX_SECONDS + 1024;
 	private static final int VOICE_MIN_BYTES = 8000;
+	private static final int VISION_MAX_WIDTH = 960;
+	private static final int VISION_MAX_HEIGHT = 540;
+	private static final int VISION_MAX_BYTES = 2_500_000;
 	private static final Path CLIENT_CONFIG_PATH = Path.of("config", "gemini-ai-companion-client.json");
 	private volatile boolean recording;
 	private long recordStartMs;
@@ -58,7 +71,15 @@ public class GeminiCompanionClient implements ClientModInitializer {
 	private Thread recordThread;
 	private String voiceUiLabel;
 	private long voiceUiUntilMs;
+	private String visionUiLabel;
+	private long visionUiUntilMs;
 	private static final ClientVoiceConfig VOICE_CONFIG = new ClientVoiceConfig();
+	private boolean pendingSettingsSend;
+	private final Object levelLock = new Object();
+	private final float[] levelSamples = new float[24];
+	private int levelIndex;
+	private float levelEma;
+	private long lastLevelMs;
 
 	@Override
 	public void onInitializeClient() {
@@ -81,6 +102,11 @@ public class GeminiCompanionClient implements ClientModInitializer {
 				client.setScreen(new ChatConfigScreen());
 			}
 			handleVoiceKey(client);
+			maybeSendSettingsSnapshot(client);
+		});
+
+		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+			pendingSettingsSend = true;
 		});
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
@@ -102,6 +128,22 @@ public class GeminiCompanionClient implements ClientModInitializer {
 					return 1;
 				}))
 			);
+			dispatcher.register(ClientCommandManager.literal("chat")
+				.then(ClientCommandManager.argument("text", StringArgumentType.greedyString())
+					.executes(context -> {
+						MinecraftClient client = MinecraftClient.getInstance();
+						if (client.player != null) {
+							forwardChatCommand(client, "chat " + StringArgumentType.getString(context, "text"));
+						}
+						return 1;
+					}))
+				.executes(context -> {
+					MinecraftClient client = MinecraftClient.getInstance();
+					if (client.player != null) {
+						forwardChatCommand(client, "chat");
+					}
+					return 1;
+				}));
 		});
 
 		ClientPlayNetworking.registerGlobalReceiver(GeminiCompanion.ConfigPayloadS2C.ID, (payload, context) -> {
@@ -131,6 +173,14 @@ public class GeminiCompanionClient implements ClientModInitializer {
 			});
 		});
 
+		ClientPlayNetworking.registerGlobalReceiver(GeminiCompanion.VisionRequestPayloadS2C.ID, (payload, context) -> {
+			context.client().execute(() -> captureAndSendVision(payload.requestId()));
+		});
+
+		ClientPlayNetworking.registerGlobalReceiver(GeminiCompanion.SettingsApplyPayloadS2C.ID, (payload, context) -> {
+			context.client().execute(() -> applyClientSetting(payload.key(), payload.value()));
+		});
+
 		HudRenderCallback.EVENT.register((context, tickDelta) -> renderVoiceOverlay(context));
 	}
 
@@ -145,8 +195,9 @@ public class GeminiCompanionClient implements ClientModInitializer {
 				voiceUiUntilMs = System.currentTimeMillis() + 1500;
 				return;
 			}
-			sendVoiceState("LISTENING");
-			startRecording(client);
+			if (startRecording(client)) {
+				sendVoiceState("LISTENING");
+			}
 		} else if (!pressed && recording) {
 			sendVoiceState("IDLE");
 			stopRecording(client);
@@ -156,9 +207,9 @@ public class GeminiCompanionClient implements ClientModInitializer {
 		}
 	}
 
-	private void startRecording(MinecraftClient client) {
+	private boolean startRecording(MinecraftClient client) {
 		if (recording) {
-			return;
+			return true;
 		}
 		audioFormat = new AudioFormat(VOICE_SAMPLE_RATE, 16, 1, true, false);
 		try {
@@ -166,33 +217,35 @@ public class GeminiCompanionClient implements ClientModInitializer {
 			if (targetLine == null) {
 				voiceUiLabel = "No microphone detected";
 				voiceUiUntilMs = System.currentTimeMillis() + 2000;
-				return;
+				return false;
 			}
 			targetLine.open(audioFormat);
 			targetLine.start();
 		} catch (Exception e) {
 			voiceUiLabel = "Microphone error";
 			voiceUiUntilMs = System.currentTimeMillis() + 2000;
-			return;
+			return false;
 		}
 		recording = true;
 		recordStartMs = System.currentTimeMillis();
 		audioBuffer = new ByteArrayOutputStream();
-		recordThread = new Thread(() -> {
-			byte[] buffer = new byte[4096];
-			while (recording && targetLine != null) {
-				int count = targetLine.read(buffer, 0, buffer.length);
-				if (count > 0) {
-					if (audioBuffer.size() + count > VOICE_MAX_BYTES) {
-						recording = false;
-						break;
+			recordThread = new Thread(() -> {
+				byte[] buffer = new byte[4096];
+				while (recording && targetLine != null) {
+					int count = targetLine.read(buffer, 0, buffer.length);
+					if (count > 0) {
+						if (audioBuffer.size() + count > VOICE_MAX_BYTES) {
+							recording = false;
+							break;
+						}
+						audioBuffer.write(buffer, 0, count);
+						updateAudioLevel(buffer, count);
 					}
-					audioBuffer.write(buffer, 0, count);
 				}
-			}
-		}, "GeminiAI-VoiceCapture");
+			}, "GeminiAI-VoiceCapture");
 		recordThread.setDaemon(true);
 		recordThread.start();
+		return true;
 	}
 
 	private void stopRecording(MinecraftClient client) {
@@ -231,11 +284,207 @@ public class GeminiCompanionClient implements ClientModInitializer {
 		ClientPlayNetworking.send(new GeminiCompanion.AudioPayloadC2S("audio/wav", wav));
 	}
 
+	private void updateAudioLevel(byte[] buffer, int length) {
+		if (length < 2) {
+			return;
+		}
+		int sampleCount = length / 2;
+		double sum = 0.0;
+		double peak = 0.0;
+		for (int i = 0; i < sampleCount; i++) {
+			int lo = buffer[i * 2] & 0xFF;
+			int hi = buffer[i * 2 + 1] & 0xFF;
+			short sample = (short) ((hi << 8) | lo);
+			double norm = sample / 32768.0;
+			double abs = Math.abs(norm);
+			if (abs > peak) {
+				peak = abs;
+			}
+			sum += norm * norm;
+		}
+		double rms = Math.sqrt(sum / sampleCount);
+		float level = (float) Math.min(1.0, Math.max(rms, peak) * 3.5);
+		synchronized (levelLock) {
+			levelEma = levelEma * 0.8f + level * 0.2f;
+			levelSamples[levelIndex] = levelEma;
+			levelIndex = (levelIndex + 1) % levelSamples.length;
+			lastLevelMs = System.currentTimeMillis();
+		}
+	}
+
 	private void sendVoiceState(String state) {
 		if (!ClientPlayNetworking.canSend(GeminiCompanion.VoiceStatePayloadC2S.ID)) {
 			return;
 		}
 		ClientPlayNetworking.send(new GeminiCompanion.VoiceStatePayloadC2S(state));
+	}
+
+	private void applyClientSetting(String key, String value) {
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client == null) {
+			return;
+		}
+		Path optionsPath = client.runDirectory.toPath().resolve("options.txt");
+		String previous = updateOptionFile(optionsPath, key, value);
+		reloadGameOptions(client);
+		pendingSettingsSend = true;
+		String message = previous == null
+			? ("Setting " + key + " set to " + value + ".")
+			: ("Setting " + key + " changed " + previous + " -> " + value + ".");
+		sendClientMessage(message);
+		voiceUiLabel = "Setting applied";
+		voiceUiUntilMs = System.currentTimeMillis() + 1500;
+	}
+
+	private String updateOptionFile(Path path, String key, String value) {
+		String previous = null;
+		try {
+			List<String> lines = Files.exists(path) ? Files.readAllLines(path) : new ArrayList<>();
+			boolean updated = false;
+			for (int i = 0; i < lines.size(); i++) {
+				String line = lines.get(i);
+				if (line == null || line.isBlank() || line.startsWith("#")) {
+					continue;
+				}
+				int idx = line.indexOf(':');
+				if (idx <= 0) {
+					continue;
+				}
+				String existingKey = line.substring(0, idx).trim();
+				if (existingKey.equals(key)) {
+					previous = line.substring(idx + 1).trim();
+					lines.set(i, key + ":" + value);
+					updated = true;
+					break;
+				}
+			}
+			if (!updated) {
+				lines.add(key + ":" + value);
+			}
+			Files.write(path, lines);
+		} catch (IOException ignored) {
+		}
+		return previous;
+	}
+
+	private void reloadGameOptions(MinecraftClient client) {
+		try {
+			var method = client.options.getClass().getMethod("load");
+			method.invoke(client.options);
+		} catch (Exception ignored) {
+		}
+	}
+
+	private void maybeSendSettingsSnapshot(MinecraftClient client) {
+		if (!pendingSettingsSend) {
+			return;
+		}
+		if (client == null || client.player == null) {
+			return;
+		}
+		if (!ClientPlayNetworking.canSend(GeminiCompanion.SettingsPayloadC2S.ID)) {
+			return;
+		}
+		pendingSettingsSend = false;
+		JsonObject snapshot = buildSettingsSnapshot(client);
+		ClientPlayNetworking.send(new GeminiCompanion.SettingsPayloadC2S(snapshot.toString()));
+	}
+
+	private void forwardChatCommand(MinecraftClient client, String command) {
+		if (client == null || client.getNetworkHandler() == null) {
+			return;
+		}
+		Object handler = client.getNetworkHandler();
+		if (invokeSendChatCommand(handler, command)) {
+			return;
+		}
+		if (sendCommandPacket(handler, command)) {
+			return;
+		}
+		sendClientMessage("Unable to forward /chat command to server.");
+	}
+
+	private boolean invokeSendChatCommand(Object handler, String command) {
+		try {
+			Method method = handler.getClass().getMethod("sendChatCommand", String.class);
+			method.invoke(handler, command);
+			return true;
+		} catch (Exception ignored) {
+			return false;
+		}
+	}
+
+	private boolean sendCommandPacket(Object handler, String command) {
+		try {
+			Class<?> packetClass;
+			try {
+				packetClass = Class.forName("net.minecraft.network.packet.c2s.play.CommandExecutionC2SPacket");
+			} catch (ClassNotFoundException ignored) {
+				packetClass = Class.forName("net.minecraft.network.packet.c2s.play.ChatCommandC2SPacket");
+			}
+			Constructor<?> ctor = packetClass.getConstructor(String.class);
+			Object packet = ctor.newInstance(command);
+			Class<?> packetType = Class.forName("net.minecraft.network.packet.Packet");
+			Method sendPacket = handler.getClass().getMethod("sendPacket", packetType);
+			sendPacket.invoke(handler, packet);
+			return true;
+		} catch (Exception ignored) {
+			return false;
+		}
+	}
+
+	private JsonObject buildSettingsSnapshot(MinecraftClient client) {
+		Map<String, String> settings = new LinkedHashMap<>();
+		Map<String, String> controls = new LinkedHashMap<>();
+		Path optionsPath = client.runDirectory.toPath().resolve("options.txt");
+		Map<String, String> options = readOptionsFile(optionsPath);
+
+		for (var entry : options.entrySet()) {
+			String key = entry.getKey();
+			String value = entry.getValue();
+			if (key.startsWith("key_")) {
+				controls.put(key, value);
+			} else {
+				settings.put(key, value);
+			}
+		}
+
+		JsonObject root = new JsonObject();
+		root.add("video", mapToJson(settings));
+		root.add("controls", mapToJson(controls));
+		root.addProperty("updatedMs", System.currentTimeMillis());
+		return root;
+	}
+
+	private Map<String, String> readOptionsFile(Path path) {
+		Map<String, String> map = new LinkedHashMap<>();
+		if (!Files.exists(path)) {
+			return map;
+		}
+		try {
+			for (String line : Files.readAllLines(path)) {
+				if (line == null || line.isBlank() || line.startsWith("#")) {
+					continue;
+				}
+				int idx = line.indexOf(':');
+				if (idx <= 0 || idx >= line.length() - 1) {
+					continue;
+				}
+				String key = line.substring(0, idx).trim();
+				String value = line.substring(idx + 1).trim();
+				map.put(key, value);
+			}
+		} catch (IOException ignored) {
+		}
+		return map;
+	}
+
+	private JsonObject mapToJson(Map<String, String> map) {
+		JsonObject obj = new JsonObject();
+		for (var entry : map.entrySet()) {
+			obj.addProperty(entry.getKey(), entry.getValue());
+		}
+		return obj;
 	}
 
 	private byte[] toWav(byte[] pcm, AudioFormat format) throws IOException {
@@ -253,32 +502,194 @@ public class GeminiCompanionClient implements ClientModInitializer {
 			return;
 		}
 		long now = System.currentTimeMillis();
-		if (!recording && (voiceUiLabel == null || now > voiceUiUntilMs)) {
+		boolean showVoice = voiceUiLabel != null && now <= voiceUiUntilMs;
+		boolean showVision = visionUiLabel != null && now <= visionUiUntilMs;
+		if (!recording && !showVoice && !showVision) {
 			return;
 		}
-		int width = client.getWindow().getScaledWidth();
-		int y = 12;
-		String label;
+		String label = null;
+		int accent = 0xFF6BB5FF;
 		if (recording) {
-			long elapsed = now - recordStartMs;
-			label = "Recording " + formatTime(elapsed) + " / 00:30";
-		} else {
+			label = "LISTENING";
+			accent = 0xFF4CAF50;
+		} else if (showVision) {
+			label = visionUiLabel;
+			accent = 0xFFB388FF;
+		} else if (showVoice) {
 			label = voiceUiLabel;
+			if (label != null && label.toLowerCase(Locale.ROOT).contains("transcrib")) {
+				label = "TRANSCRIBING";
+				accent = 0xFF6BB5FF;
+			}
 		}
+		if (label != null) {
+			int[] pill = drawStatusPill(context, client, label, accent);
+			if (recording) {
+				drawRecordingTimerBar(context, client, now, pill[0], pill[1], pill[2]);
+				drawAudioWaveform(context, client, now, pill[0], pill[1], pill[2]);
+			}
+		}
+	}
+
+	private int[] drawStatusPill(DrawContext context, MinecraftClient client, String label, int accent) {
+		int x = 10;
+		int y = 8;
 		int textWidth = client.textRenderer.getWidth(label);
-		int boxWidth = textWidth + 24;
-		int x = (width - boxWidth) / 2;
-		context.fill(x, y, x + boxWidth, y + 22, 0xAA121926);
-		context.drawBorder(x, y, boxWidth, 22, 0xFF2E3A52);
-		drawGradientText(context, label, x + 12, y + 7, (int) (now / 75));
-		if (recording) {
-			float progress = Math.min(1f, (now - recordStartMs) / (float) (VOICE_MAX_SECONDS * 1000L));
-			int barX = x + 8;
-			int barY = y + 18;
-			int barWidth = boxWidth - 16;
-			context.fill(barX, barY, barX + barWidth, barY + 2, 0x553A4A5E);
-			context.fill(barX, barY, barX + (int) (barWidth * progress), barY + 2, 0xFF6BB5FF);
+		int pillWidth = textWidth + 34;
+		context.fill(x, y, x + pillWidth, y + 18, 0xCC121926);
+		context.drawBorder(x, y, pillWidth, 18, 0xFF2E3A52);
+		context.fill(x + 8, y + 6, x + 12, y + 10, accent);
+		context.drawTextWithShadow(client.textRenderer, Text.literal(label), x + 16, y + 5, 0xFFE6EAF2);
+		return new int[] { x, y, pillWidth };
+	}
+
+	private void drawRecordingTimerBar(DrawContext context, MinecraftClient client, long now, int pillX, int pillY, int pillWidth) {
+		long elapsed = now - recordStartMs;
+		float progress = Math.min(1f, elapsed / (float) (VOICE_MAX_SECONDS * 1000L));
+		String timer = formatTime(elapsed) + " / 00:30";
+		int barX = pillX;
+		int barY = pillY + 20;
+		int barW = pillWidth;
+		context.fill(barX, barY, barX + barW, barY + 8, 0xCC0F1622);
+		context.drawBorder(barX, barY, barW, 8, 0xFF2E3A52);
+		context.fill(barX + 1, barY + 1, barX + 1 + (int) ((barW - 2) * progress), barY + 7, 0xFF4CAF50);
+		int textX = barX + (barW - client.textRenderer.getWidth(timer)) / 2;
+		context.drawTextWithShadow(client.textRenderer, Text.literal(timer), textX, barY + 10, 0xFF9BE7C4);
+	}
+
+	private void drawAudioWaveform(DrawContext context, MinecraftClient client, long now, int pillX, int pillY, int pillWidth) {
+		float[] snapshot = new float[levelSamples.length];
+		int index;
+		long lastMs;
+		synchronized (levelLock) {
+			System.arraycopy(levelSamples, 0, snapshot, 0, levelSamples.length);
+			index = levelIndex;
+			lastMs = lastLevelMs;
 		}
+		boolean noSignal = now - lastMs > 600L;
+		int bars = 12;
+		int barWidth = Math.max(2, (pillWidth - 6) / bars);
+		int startX = pillX + 3;
+		int startY = pillY + 40;
+		int height = 12;
+		context.fill(startX - 2, startY - 2, startX + pillWidth - 1, startY + height + 2, 0xAA0F1622);
+		context.drawBorder(startX - 2, startY - 2, pillWidth - 1, height + 4, 0xFF2E3A52);
+		if (noSignal) {
+			context.drawTextWithShadow(client.textRenderer, Text.literal("No signal"), startX + 6, startY + height + 4, 0xFF9AA3AF);
+			return;
+		}
+		for (int i = 0; i < bars; i++) {
+			int sampleIndex = (index - 1 - i);
+			while (sampleIndex < 0) {
+				sampleIndex += snapshot.length;
+			}
+			float level = snapshot[sampleIndex];
+			level = Math.max(0.05f, level);
+			int barHeight = Math.max(2, (int) (level * height));
+			int x = startX + i * barWidth;
+			int y = startY + height - barHeight;
+			int color = colorForLevel(level);
+			context.fill(x, y, x + barWidth - 1, startY + height, color);
+		}
+	}
+
+	private int colorForLevel(float level) {
+		if (level < 0.2f) {
+			return 0xFF4FC3F7;
+		}
+		if (level < 0.5f) {
+			return 0xFF29B6F6;
+		}
+		if (level < 0.75f) {
+			return 0xFFFFB74D;
+		}
+		return 0xFFFF5252;
+	}
+
+	private void captureAndSendVision(long requestId) {
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client.player == null || client.getFramebuffer() == null) {
+			return;
+		}
+		visionUiLabel = "Capturing...";
+		visionUiUntilMs = System.currentTimeMillis() + 1500;
+		NativeImage image = ScreenshotRecorder.takeScreenshot(client.getFramebuffer());
+		if (image == null) {
+			visionUiLabel = "Vision failed";
+			visionUiUntilMs = System.currentTimeMillis() + 2000;
+			return;
+		}
+		NativeImage working = image;
+		try {
+			working = scaleToFit(working, VISION_MAX_WIDTH, VISION_MAX_HEIGHT);
+			byte[] png = encodePng(working);
+			while (png.length > VISION_MAX_BYTES && working.getWidth() > 240 && working.getHeight() > 135) {
+				NativeImage smaller = scaleToFit(working, (int) (working.getWidth() * 0.75), (int) (working.getHeight() * 0.75));
+				if (working != image) {
+					working.close();
+				}
+				working = smaller;
+				png = encodePng(working);
+			}
+			if (!ClientPlayNetworking.canSend(GeminiCompanion.VisionPayloadC2S.ID)) {
+				visionUiLabel = "Vision unsupported";
+				visionUiUntilMs = System.currentTimeMillis() + 2000;
+				return;
+			}
+			ClientPlayNetworking.send(new GeminiCompanion.VisionPayloadC2S(requestId, "image/png", png));
+			visionUiLabel = "ANALYZING";
+			visionUiUntilMs = System.currentTimeMillis() + 3500;
+		} catch (Exception ignored) {
+			visionUiLabel = "Vision failed";
+			visionUiUntilMs = System.currentTimeMillis() + 2000;
+		} finally {
+			if (working != null) {
+				working.close();
+			}
+			if (image != null && image != working) {
+				image.close();
+			}
+		}
+	}
+
+	private NativeImage scaleToFit(NativeImage source, int maxWidth, int maxHeight) {
+		int width = source.getWidth();
+		int height = source.getHeight();
+		if (width <= maxWidth && height <= maxHeight) {
+			return source;
+		}
+		double scale = Math.min((double) maxWidth / width, (double) maxHeight / height);
+		int newWidth = Math.max(1, (int) Math.round(width * scale));
+		int newHeight = Math.max(1, (int) Math.round(height * scale));
+		NativeImage scaled = new NativeImage(newWidth, newHeight, false);
+		for (int y = 0; y < newHeight; y++) {
+			int srcY = (int) Math.min(height - 1, Math.round(y / scale));
+			for (int x = 0; x < newWidth; x++) {
+				int srcX = (int) Math.min(width - 1, Math.round(x / scale));
+				scaled.setColor(x, y, source.getColor(srcX, srcY));
+			}
+		}
+		return scaled;
+	}
+
+	private byte[] encodePng(NativeImage image) throws IOException {
+		int width = image.getWidth();
+		int height = image.getHeight();
+		BufferedImage buffered = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+		for (int y = 0; y < height; y++) {
+			for (int x = 0; x < width; x++) {
+				int abgr = image.getColor(x, y);
+				int a = (abgr >>> 24) & 0xFF;
+				int b = (abgr >>> 16) & 0xFF;
+				int g = (abgr >>> 8) & 0xFF;
+				int r = abgr & 0xFF;
+				int argb = (a << 24) | (r << 16) | (g << 8) | b;
+				buffered.setRGB(x, y, argb);
+			}
+		}
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ImageIO.write(buffered, "png", out);
+		return out.toByteArray();
 	}
 
 	private void drawGradientText(DrawContext context, String text, int x, int y, int offset) {
@@ -382,14 +793,15 @@ public class GeminiCompanionClient implements ClientModInitializer {
 	}
 
 	private static final class ChatConfigScreen extends Screen {
-		private static final int BUTTON_WIDTH = 150;
-		private static final int BUTTON_HEIGHT = 20;
-		private static final int SMALL_BUTTON_WIDTH = 34;
-		private static final int SAVE_BUTTON_WIDTH = 70;
-		private static final int PANEL_WIDTH = 420;
-		private static final int PANEL_HEIGHT = 340;
-		private static final int SECTION_GAP = 22;
-		private static final int HEADER_HEIGHT = 14;
+		private static final int BUTTON_WIDTH = 110;
+		private static final int BUTTON_HEIGHT = 18;
+		private static final int SMALL_BUTTON_WIDTH = 24;
+		private static final int SAVE_BUTTON_WIDTH = 50;
+		private static final int PANEL_WIDTH = 310;
+		private static final int PANEL_HEIGHT = 270;
+		private static final int SECTION_GAP = 18;
+		private static final int HEADER_HEIGHT = 12;
+		private static final int ROW_GAP = 18;
 		private static final int ANIM_DURATION_MS = 150;
 		private static final int COLOR_PANEL_BG = 0x191F2B;
 		private static final int COLOR_PANEL_BORDER = 0x2E3A52;
@@ -435,9 +847,9 @@ public class GeminiCompanionClient implements ClientModInitializer {
 			openTimeMs = System.currentTimeMillis();
 			panelX = (this.width - PANEL_WIDTH) / 2;
 			panelY = (this.height - PANEL_HEIGHT) / 2;
-			int leftCol = panelX + 22;
-			int rightCol = panelX + PANEL_WIDTH - BUTTON_WIDTH - 22;
-			int row = panelY + 36;
+			int leftCol = panelX + 16;
+			int rightCol = panelX + PANEL_WIDTH - BUTTON_WIDTH - 16;
+			int row = panelY + 28;
 
 			settingsHeaderY = row;
 			row += HEADER_HEIGHT + 6;
@@ -445,24 +857,24 @@ public class GeminiCompanionClient implements ClientModInitializer {
 			registerBaseWidget(debugButton);
 			sidebarButton = addStyledButton(rightCol, row, "Sidebar", this::toggleSidebar, ButtonStyle.TOGGLE_ON);
 			registerBaseWidget(sidebarButton);
-			row += 24;
+			row += ROW_GAP;
 			soundsButton = addStyledButton(leftCol, row, "Sounds", this::toggleSounds, ButtonStyle.TOGGLE_ON);
 			registerBaseWidget(soundsButton);
 			particlesButton = addStyledButton(rightCol, row, "Particles", this::cycleParticles, ButtonStyle.ACTION);
 			registerBaseWidget(particlesButton);
-			row += 24;
+			row += ROW_GAP;
 			voiceButton = addStyledButton(leftCol, row, "Voice", this::toggleVoice, ButtonStyle.TOGGLE_ON);
 			registerBaseWidget(voiceButton);
 			modelButton = addStyledButton(rightCol, row, "Model", this::cycleModel, ButtonStyle.ACTION);
 			registerBaseWidget(modelButton);
-			row += 24;
+			row += ROW_GAP;
 			micButton = addStyledButton(rightCol, row, "Microphone", this::toggleMicDropdown, ButtonStyle.ACTION);
 			registerBaseWidget(micButton);
-			row += 24;
+			row += ROW_GAP;
 			retriesRowY = row;
-			retriesMinus = addSmallStyledButton(panelX + PANEL_WIDTH / 2 - 52, row, SMALL_BUTTON_WIDTH, "-", () -> adjustRetries(-1), ButtonStyle.ACTION);
+			retriesMinus = addSmallStyledButton(panelX + PANEL_WIDTH / 2 - 40, row, SMALL_BUTTON_WIDTH, "-", () -> adjustRetries(-1), ButtonStyle.ACTION);
 			registerBaseWidget(retriesMinus);
-			retriesPlus = addSmallStyledButton(panelX + PANEL_WIDTH / 2 + 22, row, SMALL_BUTTON_WIDTH, "+", () -> adjustRetries(1), ButtonStyle.ACTION);
+			retriesPlus = addSmallStyledButton(panelX + PANEL_WIDTH / 2 + 18, row, SMALL_BUTTON_WIDTH, "+", () -> adjustRetries(1), ButtonStyle.ACTION);
 			registerBaseWidget(retriesPlus);
 
 			row += SECTION_GAP;
@@ -470,34 +882,34 @@ public class GeminiCompanionClient implements ClientModInitializer {
 			row += HEADER_HEIGHT + 6;
 			registerBaseWidget(addStyledButton(leftCol, row, "History", () -> sendCommand("/chat history"), ButtonStyle.ACTION));
 			registerBaseWidget(addStyledButton(rightCol, row, "Export", () -> sendCommand("/chat export 5 txt"), ButtonStyle.ACTION));
-			row += 24;
+			row += ROW_GAP;
 			registerBaseWidget(addStyledButton(leftCol, row, "Smart Retry", () -> sendCommand("/chat smarter"), ButtonStyle.ACTION));
 			registerBaseWidget(addStyledButton(rightCol, row, "Cancel", () -> sendCommand("/chat cancel"), ButtonStyle.DANGER));
 
 			row += SECTION_GAP;
 			keysHeaderY = row;
 			row += HEADER_HEIGHT + 6;
-			int fieldWidth = 230;
+			int fieldWidth = 160;
 			playerKeyField = new TextFieldWidget(this.textRenderer, leftCol, row, fieldWidth, BUTTON_HEIGHT, Text.literal("Player Key"));
 			playerKeyField.setPlaceholder(Text.literal("Player API key"));
 			playerKeyField.setMaxLength(128);
 			addSelectableChild(playerKeyField);
 			addDrawableChild(playerKeyField);
 			registerBaseWidget(playerKeyField);
-			registerBaseWidget(addSmallStyledButton(leftCol + fieldWidth + 8, row, SAVE_BUTTON_WIDTH, "Save", () -> saveKey(7, playerKeyField.getText()), ButtonStyle.ACTION));
+			registerBaseWidget(addSmallStyledButton(leftCol + fieldWidth + 6, row, SAVE_BUTTON_WIDTH, "Save", () -> saveKey(7, playerKeyField.getText()), ButtonStyle.ACTION));
 
-			row += 24;
+			row += ROW_GAP;
 			serverKeyField = new TextFieldWidget(this.textRenderer, leftCol, row, fieldWidth, BUTTON_HEIGHT, Text.literal("Server Key"));
 			serverKeyField.setPlaceholder(Text.literal("Server default key"));
 			serverKeyField.setMaxLength(128);
 			addSelectableChild(serverKeyField);
 			addDrawableChild(serverKeyField);
 			registerBaseWidget(serverKeyField);
-			registerBaseWidget(addSmallStyledButton(leftCol + fieldWidth + 8, row, SAVE_BUTTON_WIDTH, "Save", () -> saveKey(8, serverKeyField.getText()), ButtonStyle.ACTION));
-			keyStatusY = row + 24;
+			registerBaseWidget(addSmallStyledButton(leftCol + fieldWidth + 6, row, SAVE_BUTTON_WIDTH, "Save", () -> saveKey(8, serverKeyField.getText()), ButtonStyle.ACTION));
+			keyStatusY = row + ROW_GAP;
 
 			registerBaseWidget(addDrawableChild(ButtonWidget.builder(Text.literal("Close"), button -> close())
-				.dimensions(panelX + (PANEL_WIDTH - BUTTON_WIDTH) / 2, panelY + PANEL_HEIGHT - 28, BUTTON_WIDTH, BUTTON_HEIGHT)
+				.dimensions(panelX + (PANEL_WIDTH - BUTTON_WIDTH) / 2, panelY + PANEL_HEIGHT - 22, BUTTON_WIDTH, BUTTON_HEIGHT)
 				.build()));
 
 			requestSync();
@@ -723,7 +1135,8 @@ public class GeminiCompanionClient implements ClientModInitializer {
 			context.fillGradient(0, 0, this.width, this.height, 0xB00E1018, 0xB0101A2B);
 			context.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + PANEL_HEIGHT, (panelAlpha << 24) | COLOR_PANEL_BG);
 			context.drawBorder(panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT, 0xFF2E3A52);
-			context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, panelY + 12, 0xFFE6EAF2);
+			context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, panelY + 8, 0xFFE6EAF2);
+			drawLiveInfo(context);
 			drawSectionHeader(context, "SETTINGS", settingsHeaderY);
 			drawSectionHeader(context, "ACTIONS", actionsHeaderY);
 			drawSectionHeader(context, "API KEYS", keysHeaderY);
@@ -844,21 +1257,30 @@ public class GeminiCompanionClient implements ClientModInitializer {
 
 		private void drawRetriesControl(DrawContext context) {
 			int centerX = panelX + PANEL_WIDTH / 2;
-			context.drawTextWithShadow(textRenderer, Text.literal("Retries"), panelX + 24, retriesRowY + 6, 0xFFB7C6DA);
+			context.drawTextWithShadow(textRenderer, Text.literal("Retries"), panelX + 16, retriesRowY + 4, 0xFFB7C6DA);
 			context.drawCenteredTextWithShadow(
 				textRenderer,
 				Text.literal(String.valueOf(ClientConfigState.INSTANCE.retries)),
 				centerX,
-				retriesRowY + 6,
+				retriesRowY + 4,
 				0xFFFFFFFF
 			);
 		}
 
+		private void drawLiveInfo(DrawContext context) {
+			ClientConfigState state = ClientConfigState.INSTANCE;
+			String model = state.model == null ? "auto" : state.model;
+			String mic = VOICE_CONFIG.micName == null || VOICE_CONFIG.micName.isBlank() ? "Default" : shortenLabel(VOICE_CONFIG.micName, 18);
+			String voiceState = VOICE_CONFIG.enabled ? "ON" : "OFF";
+			String info = "Model: " + model + " | Voice: " + voiceState + " | Mic: " + mic;
+			context.drawCenteredTextWithShadow(textRenderer, Text.literal(info), this.width / 2, panelY + 20, 0xFF9FB0C7);
+		}
+
 		private void drawSectionHeader(DrawContext context, String label, int y) {
-			int lineY = y + 6;
-			context.fill(panelX + 18, lineY, panelX + PANEL_WIDTH - 18, lineY + 1, 0xFF3A4A5E);
+			int lineY = y + 5;
+			context.fill(panelX + 14, lineY, panelX + PANEL_WIDTH - 14, lineY + 1, 0xFF3A4A5E);
 			int textWidth = textRenderer.getWidth(label);
-			int textX = panelX + 24;
+			int textX = panelX + 18;
 			context.fill(textX - 4, y, textX + textWidth + 4, y + 12, 0xFF191F2B);
 			context.drawTextWithShadow(textRenderer, Text.literal(label).formatted(Formatting.AQUA), textX, y, 0xFF6BB5FF);
 		}
@@ -877,7 +1299,7 @@ public class GeminiCompanionClient implements ClientModInitializer {
 				keyStatus = "No API key set";
 				color = Formatting.RED;
 			}
-			context.drawTextWithShadow(textRenderer, Text.literal(keyStatus).formatted(color), panelX + 24, keyStatusY + 2, 0xFFFFFFFF);
+			context.drawTextWithShadow(textRenderer, Text.literal(keyStatus).formatted(color), panelX + 16, keyStatusY + 2, 0xFFFFFFFF);
 		}
 
 		private void drawToast(DrawContext context, long now) {

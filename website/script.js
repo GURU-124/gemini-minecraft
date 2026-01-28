@@ -5,25 +5,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
-            const tabId = btn.dataset.tab;
+            const target = btn.dataset.tab;
+
             tabBtns.forEach(b => b.classList.remove('active'));
-            tabContents.forEach(c => c.classList.remove('active'));
-            btn.classList.add('active');
-            document.getElementById(tabId).classList.add('active');
-        });
-    });
+            tabPanes.forEach(p => p.classList.remove('active'));
 
-    // Tab switching for examples section
-    const exampleBtns = document.querySelectorAll('.example-tab-btn');
-    const examplePanels = document.querySelectorAll('.example-panel');
-
-    exampleBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const exampleId = btn.dataset.example;
-            exampleBtns.forEach(b => b.classList.remove('active'));
-            examplePanels.forEach(p => p.classList.remove('active'));
             btn.classList.add('active');
-            document.getElementById(exampleId).classList.add('active');
+            document.getElementById(target).classList.add('active');
         });
     });
 
@@ -38,105 +26,68 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Animate elements on scroll with stagger
+    /* ===== Scroll Reveal Animations ===== */
     const observerOptions = {
         threshold: 0.1,
-        rootMargin: '0px 0px -80px 0px'
+        rootMargin: '0px 0px -50px 0px'
     };
 
     const observer = new IntersectionObserver((entries) => {
-        entries.forEach((entry, index) => {
+        entries.forEach(entry => {
             if (entry.isIntersecting) {
-                setTimeout(() => {
-                    entry.target.classList.add('animate-in');
-                }, index * 100);
+                entry.target.style.opacity = '1';
+                entry.target.style.transform = 'translateY(0)';
                 observer.unobserve(entry.target);
             }
         });
     }, observerOptions);
 
-    document.querySelectorAll('.feature-card, .mode-card, .step, .command-item, .example-card').forEach(el => {
+    document.querySelectorAll('.feature-card, .audience-card, .step').forEach(el => {
         el.style.opacity = '0';
-        el.style.transform = 'translateY(40px)';
-        el.style.transition = 'opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1)';
+        el.style.transform = 'translateY(30px)';
+        el.style.transition = 'all 0.6s cubic-bezier(0.23, 1, 0.32, 1)';
         observer.observe(el);
     });
 
-    const style = document.createElement('style');
-    style.textContent = `
-        .animate-in {
-            opacity: 1 !important;
-            transform: translateY(0) !important;
-        }
-    `;
-    document.head.appendChild(style);
-
-    // Rotating terminal demo
+    /* ===== Terminal Rotation Logic ===== */
     const demoSlides = document.querySelectorAll('.demo-slide');
     const termDots = document.querySelectorAll('.term-dot');
-    let currentDemo = 0;
-    let demoInterval;
+    let currentSlide = 0;
+    let slideInterval;
 
-    function showDemo(index) {
-        demoSlides.forEach((slide, i) => {
-            slide.classList.remove('active');
-            if (i === index) {
-                slide.classList.add('active');
-                // Reset animations for the new slide
-                const lines = slide.querySelectorAll('.chat-line');
-                lines.forEach(line => {
-                    line.style.animation = 'none';
-                    line.offsetHeight; // Trigger reflow
-                    line.style.animation = null;
-                });
-            }
-        });
-        termDots.forEach((dot, i) => {
-            dot.classList.toggle('active', i === index);
-        });
-        currentDemo = index;
+    function showSlide(index) {
+        demoSlides.forEach(s => s.classList.remove('active'));
+        termDots.forEach(d => d.classList.remove('active'));
+
+        demoSlides[index].classList.add('active');
+        termDots[index].classList.add('active');
+        currentSlide = index;
     }
 
-    function nextDemo() {
-        const next = (currentDemo + 1) % demoSlides.length;
-        showDemo(next);
+    function nextSlide() {
+        let next = (currentSlide + 1) % demoSlides.length;
+        showSlide(next);
     }
 
-    // Auto-rotate demos every 6 seconds
-    if (demoSlides.length > 0) {
-        demoInterval = setInterval(nextDemo, 6000);
+    function startAutoSlide() {
+        slideInterval = setInterval(nextSlide, 6000);
+    }
 
-        // Click on dots to navigate
-        termDots.forEach(dot => {
-            dot.addEventListener('click', () => {
-                clearInterval(demoInterval);
-                showDemo(parseInt(dot.dataset.goto));
-                demoInterval = setInterval(nextDemo, 6000);
-            });
+    function resetAutoSlide() {
+        clearInterval(slideInterval);
+        startAutoSlide();
+    }
+
+    termDots.forEach((dot, index) => {
+        dot.addEventListener('click', () => {
+            showSlide(index);
+            resetAutoSlide();
         });
-
-        // Pause on hover
-        const terminal = document.querySelector('.terminal');
-        if (terminal) {
-            terminal.addEventListener('mouseenter', () => clearInterval(demoInterval));
-            terminal.addEventListener('mouseleave', () => {
-                demoInterval = setInterval(nextDemo, 6000);
-            });
-        }
-    }
-
-    // Nav background on scroll with blur
-    const nav = document.querySelector('.nav');
-    window.addEventListener('scroll', () => {
-        const currentScroll = window.pageYOffset;
-        if (currentScroll > 100) {
-            nav.style.background = 'rgba(5, 5, 8, 0.95)';
-            nav.style.borderBottomColor = 'rgba(168, 85, 247, 0.2)';
-        } else {
-            nav.style.background = 'rgba(5, 5, 8, 0.7)';
-            nav.style.borderBottomColor = 'rgba(255, 255, 255, 0.05)';
-        }
     });
+
+    if (demoSlides.length > 0) {
+        startAutoSlide();
+    }
 
     // Copy command on click with visual feedback
     document.querySelectorAll('.command-item code, .code-block, .example-card code').forEach(code => {

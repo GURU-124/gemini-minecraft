@@ -67,6 +67,12 @@ Gemini AI Companion isn't just a chatbot. It's a suite of integrated systems tha
 - **Registry Scanner**: Automatically discovers items, blocks, and entity types from your entire modpack via RegistryHints.
 - **Undo Engine**: Every AI-driven world mutation can be reverted instantly if it doesn't meet your vision.
 
+### 👁️ Agentic Vision (NEW)
+*Image understanding as an active investigation.*
+- **Think, Act, Observe Loop**: The model doesn't just "see" a static frame. it formulates plans to inspect specific screen regions and ground responses in visual evidence.
+- **Visual Scratchpad**: Uses code execution to analyze pixel-perfect details, ensuring the final answer is based on a deep understanding of the current view.
+- **Automated Skill Triggering**: When the AI detects a complex machine or circuit, it automatically triggers relevant scan skills to bridge the gap between "seeing" and "knowing."
+
 ### 📊 Pro Ecosystem
 *Information at your fingertips.*
 - **Real-Time Sidebar**: Track mode, state, token usage, and retries via a sleek in-game scoreboard.
@@ -109,6 +115,17 @@ Stop thinking of it as a "chatbot." Start thinking of it as your **Second Pilot*
 > > [Mapping] 12 recursive sub-components identified.
 > > ```
 > > **Gemini:** "To build the Digital Miner, you'll need a **Robit**, **2 Atomic Alloys**, and a **Teleportation Core**. Since you're missing the Alloys, I've calculated the raw Obsidian and Diamond dust required to smelt them now."
+
+#### 👁️ Scenario E: Agentic Vision
+> **You:** "Look at this computer, what's wrong with the circuit?"
+>
+> > [!TIP]
+> > **AGENTIC LOOP INITIATED...**
+> > 1. **Think**: Analyze screenshot for redstone dust states.
+> > 2. **Act**: Execute `chat skill nbt` on the adjacent machine.
+> > 3. **Observe**: Grounded mismatch between power state and block data.
+> >
+> > **Gemini:** "The redstone dust at your feet is powered (15), but the thermal expansion machine it's leading into is set to 'High Signal' ignore. Switch the machine UI to 'Active on High' and it will start processing."
 
 ---
 
@@ -169,7 +186,8 @@ Gemini AI Companion features a built-in **Push-to-Talk** system for true hands-f
 
 | Command          | Description                                                        |
 | :--------------- | :----------------------------------------------------------------- |
-| `/chat <prompt>` | Start a conversation or world-management task.                     |
+| `/chat <prompt>` | Start a conversation (automatically triggers vision if needed).    |
+| `/chat vision`   | Force a screenshot capture and visual analysis of your view.       |
 | `/chat undo`     | **Rollback** the last set of AI-executed commands.                 |
 | `/chat smarter`  | Force the AI to re-evaluate the last prompt using a **Pro** model. |
 | `/chat clear`    | Wipe current session history for a fresh start.                    |
@@ -307,8 +325,8 @@ The mod maintains strict separation between the **Netty Work Pool** (Networking)
 
 The journey to true digital agency is just beginning. Here is where we're headed:
 
+- [x] **AI Vision (Screenshots)**: Allow the AI to "see" what you see via automated frame analysis.
 - [ ] **Multiplayer-Aware Memory**: Shared AI context that recognizes different players and their unique histories.
-- [ ] **AI Vision (Screenshots)**: Allow the AI to "see" what you see via automated frame analysis.
 - [ ] **Voice Synthesis (TTS)**: The AI talks back to you with custom, high-quality personality profiles.
 - [ ] **Plugin API**: A framework for creators to write custom behaviors/skills for the AI.
 - [ ] **Cross-Loader Support**: Bringing the companion to NeoForge/Forge.

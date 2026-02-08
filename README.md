@@ -8,7 +8,7 @@
 [![Minecraft 1.21.1](https://img.shields.io/badge/Minecraft-1.21.1-blue?style=for-the-badge&logo=minecraft)](https://www.minecraft.net/)
 [![Fabric](https://img.shields.io/badge/Fabric-Loader-9c8a7b?style=for-the-badge&logo=fabric)](https://fabricmc.net/)
 [![Gemini 3.0](https://img.shields.io/badge/Power-Gemini_3.0-orange?style=for-the-badge&logo=google-gemini)](https://deepmind.google/technologies/gemini/)
-[![Official Release](https://img.shields.io/badge/Release-v1.0.1_Official-purple?style=for-the-badge)](https://github.com/aaronaalmendarez/gemini-minecraft/releases/tag/v1.0.1)
+[![Official Release](https://img.shields.io/badge/Release-v1.1.0_Orchestration-purple?style=for-the-badge)](https://github.com/aaronaalmendarez/gemini-minecraft/releases/tag/v1.1.0)
 [![MIT License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
 [**Quick Start**](#-getting-started) • [**Features**](#-pillars-of-intelligence) • [**Roadmap**](#-roadmap) • [**Commands**](#-command-terminal) • [**Technical Specs**](#-the-nerd-stack)
@@ -23,7 +23,7 @@
 
 ## ⚡ Quick Try
 
-1.  **Download** the latest release: [**v1.0.1 JAR**](https://github.com/aaronaalmendarez/gemini-minecraft/releases/tag/v1.0.1)
+1.  **Download** the latest release: [**v1.1.0 JAR**](https://github.com/aaronaalmendarez/gemini-minecraft/releases/tag/v1.1.0)
 2.  Drop the `.jar` into your **`mods`** folder.
 3.  Launch with **Fabric 1.21.1**.
 4.  **Experience the Power**:
@@ -73,11 +73,17 @@ Gemini AI Companion isn't just a chatbot. It's a suite of integrated systems tha
 - **Visual Scratchpad**: Uses code execution to analyze pixel-perfect details, ensuring the final answer is based on a deep understanding of the current view.
 - **Automated Skill Triggering**: When the AI detects a complex machine or circuit, it automatically triggers relevant scan skills to bridge the gap between "seeing" and "knowing."
 
-### 📊 Pro Ecosystem
-*Information at your fingertips.*
-- **Real-Time Sidebar**: Track mode, state, token usage, and retries via a sleek in-game scoreboard.
-- **Death Historian**: Remembers your last 20 deaths to provide precise survival strategies.
-- **History Export**: Download your entire session as `.txt` or `.json` for a permanent record of your AI journey.
+### 📍 Physical Agency (v1.1.0)
+*The AI interacts with the physical space.*
+- **3D World Highlights**: The AI can spawn temporary holographic boxes to "point" at blocks, items, or entities.
+- **X-Ray Investigation**: Visual highlights can penetrate walls, allowing the AI to guide you to hidden ores or structures.
+- **Dynamic HUD Overlays**: New high-end recording and capturing overlays provide real-time status on voice and vision processes.
+
+### 🛡️ Institutional Guardrails (v1.1.0)
+*Enterprise-grade safety and governance.*
+- **Multi-Player Permissions**: Granular **Whitelist/Blacklist** system to control who can access the AI.
+- **Setup Wizard**: Interactive startup flow to configure API keys, performance modes, and server-wide defaults.
+- **Autonomous Configuration**: The AI can analyze server performance and suggest optimal retry limits or model choices.
 
 ---
 
@@ -104,30 +110,16 @@ Stop thinking of it as a "chatbot." Start thinking of it as your **Second Pilot*
 
 </details>
 
-#### 🛠️ Scenario D: Modpack Mastery
-> **You:** "How do I make a Digital Miner from Mekanism?"
->
-> > [!IMPORTANT]
-> > **CRYSTAL-SCAN IN PROGRESS...**
-> > ```text
-> > [Registry] Found: mekanism:digital_miner
-> > [Logic] Deep-scanning RecipeHints...
-> > [Mapping] 12 recursive sub-components identified.
-> > ```
-> > **Gemini:** "To build the Digital Miner, you'll need a **Robit**, **2 Atomic Alloys**, and a **Teleportation Core**. Since you're missing the Alloys, I've calculated the raw Obsidian and Diamond dust required to smelt them now."
-
-#### 👁️ Scenario E: Agentic Vision
-> **You:** "Look at this computer, what's wrong with the circuit?"
->
+#### 📍 Scenario F: 3D Pointing (v1.1.0)
+> **You:** "Where is the nearest diamond ore?"
+> 
 > > [!TIP]
-> > **AGENTIC LOOP INITIATED...**
-> > 1. **Think**: Analyze screenshot for redstone dust states.
-> > 2. **Act**: Execute `chat skill nbt` on the adjacent machine.
-> > 3. **Observe**: Grounded mismatch between power state and block data.
-> >
-> > **Gemini:** "The redstone dust at your feet is powered (15), but the thermal expansion machine it's leading into is set to 'High Signal' ignore. Switch the machine UI to 'Active on High' and it will start processing."
-
----
+> > **X-RAY SCAN INITIATED...**
+> > ```text
+> > [Scan] Found: minecraft:diamond_ore @ -42, 12, 150
+> > [Render] Spawning Highlight Box...
+> > ```
+> > **Gemini:** "I've highlighted a diamond vein through the wall to your left. Dig approximately 12 blocks in that direction."
 
 ---
 
@@ -155,9 +147,10 @@ The mod provides real-time, cinematic feedback via an animated action bar.
 - **Java 21** & **Fabric Loader** (1.21.1)
 - A **Google Gemini API Key** ([Get one here](https://aistudio.google.com/))
 
-### 2. Physical Installation
-1. Drop the `.jar` into your `mods` folder.
-2. Launch the game.
+### 2. Configuration Wizard (v1.1.0)
+1. Drop the `.jar` into your `mods` folder and launch.
+2. Type `/chat setup` to begin the interactive configuration wizard.
+3. Use `/chat allow <player>` to grant AI access to specific users.
 
 ### 3. Connection
 Connect your key securely using the in-game terminal:
@@ -177,28 +170,24 @@ Gemini AI Companion features a built-in **Push-to-Talk** system for true hands-f
 2. **Speak Naturally**: "Build me a small oak house" or "Where is the nearest village?"
 3. **Release to Execute**: The mod will instantly transcribe your audio and pass it to the Cognitive Core for processing.
 
-> [!NOTE]
-> You can rebind the Push-to-Talk key in the standard Minecraft Controls menu.
-
 ---
 
 ## 📟 Command Terminal
 
-| Command          | Description                                                        |
-| :--------------- | :----------------------------------------------------------------- |
-| `/chat <prompt>` | Start a conversation (automatically triggers vision if needed).    |
-| `/chat vision`   | Force a screenshot capture and visual analysis of your view.       |
-| `/chat undo`     | **Rollback** the last set of AI-executed commands.                 |
-| `/chat smarter`  | Force the AI to re-evaluate the last prompt using a **Pro** model. |
-| `/chat clear`    | Wipe current session history for a fresh start.                    |
-| `/chat history`  | Browse previous exchanges in an interactive menu.                  |
-| `/chat config`   | Deep-dive into debug mode, sidebar toggles, and retry limits.      |
+| Command            | Description                                                          |
+| :----------------- | :------------------------------------------------------------------- |
+| `/chat <prompt>`   | Start a conversation (automatically triggers vision/highlights).     |
+| `/chat vision`     | Force a screenshot capture and visual analysis of your view.         |
+| `/chat setup`      | **Launch Wizard**: Interactive config for keys and permissions.      |
+| `/chat allow/deny` | **Guardrails**: Grant or revoke player access (Whitelist/Blacklist). |
+| `/chat smarter`    | Force the AI to re-evaluate the last prompt using a **Pro** model.   |
+| `/chat undo`       | **Rollback** the last set of AI-executed commands.                   |
+| `/chat history`    | Browse previous exchanges in an interactive menu.                    |
+| `/chat config`     | Deep-dive into debug mode, sidebar toggles, and retry limits.        |
 
 ---
 
 ## 🛠️ The Nerd Stack
-
-The Gemini AI Companion is built on an asynchronous, multi-threaded architecture designed for safety and speed.
 
 <details>
 <summary><b>📐 System Architecture</b> (Mermaid Diagram)</summary>
@@ -208,8 +197,8 @@ graph TB
     subgraph Minecraft Server
         A[Player Input<br>/chat or Voice] --> B[Command Handler]
         B --> C{Parse Intent}
-        C -->|Subcommand| D[Config/History/Export]
-        C -->|AI Request| E[AiChatHandler]
+        C -->|Security| C1[Permission Guard]
+        C1 -->|AI Request| E[AiChatHandler]
     end
     
     subgraph Context Orchestration
@@ -217,7 +206,7 @@ graph TB
         F --> F1[Env Sync: Time/Weather]
         F --> F2[Structure Detector]
         F --> F3[Registry Scanner: RegistryHints]
-        F --> F4[Recipe Scraper: Crafting/Smelting]
+        F --> F4[World Probe: Highlights/Xray]
     end
     
     subgraph Async Processing
@@ -230,106 +219,26 @@ graph TB
     
     subgraph Execution Engine
         I --> J{Mode Detection}
-        J -->|ASK| K[Display Answer]
-        J -->|PLAN| L[Display Strategy]
         J -->|COMMAND| M[Command Executor]
-        M --> n{Validation}
-        n -->|Success| O[Apply to World]
-        n -->|Failure| P[Retry Loop]
-        P --> H
-        O --> R1{Reprompt Needed?}
-        R1 -->|Yes| E
+        J -->|HIGHLIGHT| N[3D Render Engine]
+        M --> O[Apply to World]
+        N --> O
+        O --> R1{Recursive Loop}
+        R1 --> E
     end
 ```
-</details>
-
-<details>
-<summary><b>🔄 Request Lifecycle</b> (Sequence Diagram)</summary>
-
-```mermaid
-sequenceDiagram
-    participant P as Player
-    participant M as Mod
-    participant R as Game Registry
-    participant T as Thread Pool
-    participant G as Gemini API
-    participant W as Minecraft World
-
-    P->>M: 🎙️ Voice: "Where is the fortress?"
-    M->>T: Async Transcribe
-    T->>G: POST /audio (Base64)
-    G-->>T: "locate fortress"
-    T-->>M: Cleaned Transcript
-    
-    loop Recursive Reasoning
-        M->>R: Fetch context
-        M->>T: Request Action
-        T->>G: POST /chat
-        G-->>T: /locate fortress
-        T->>M: Command sequence
-        M->>W: execute /locate
-        W-->>M: "Fortress at 100, 64, -200"
-        M->>M: 🔄 Self-Reprompt with Output
-    end
-    
-    M->>W: execute /tp 100 64 -200
-    M->>P: "Found it! Teleporting you now."
-```
-</details>
-
-<details>
-<summary><b>↩️ Undo System Architecture</b></summary>
-
-```mermaid
-graph LR
-    subgraph Transaction
-        A[AI Commands] --> B[State Snapshot]
-        B --> C[Execution]
-    end
-    C --> D{User Satisfied?}
-    D -->|No| E[Invoke /chat undo]
-    E --> F[Restore Snapshot]
-    F --> G[World Reverted]
-```
-</details>
-
-<details>
-<summary><b>🛡️ Self-Healing Retry Loop</b></summary>
-
-The AI uses a recursive validation loop to ensure commands actually work in your specific world state.
-
-| Stage              | Action          | Logic                                                            |
-| :----------------- | :-------------- | :--------------------------------------------------------------- |
-| **1. Parse**       | JSON Validation | Ensures the AI returned a valid command array.                   |
-| **2. Dry-Run**     | Syntax Check    | Validates command strings against the Brigadier dispatcher.      |
-| **3. Execution**   | World Apply     | Attempts to run the command on the server thread.                |
-| **4. Feedback**    | Error Capture   | If it fails, the *exact* Minecraft error is sent back to Gemini. |
-| **5. Recalibrate** | Self-Correction | AI re-writes the command to fix the reported syntax/logic error. |
-| **6. Repeat**      | Recurse         | The loop continues until success or the 10-retry safety limit.   |
-
-</details>
-
-<details>
-<summary><b>🛡️ Thread Safety & Data Flow</b></summary>
-
-The mod maintains strict separation between the **Netty Work Pool** (Networking) and the **Main Server Thread** (World Ticking). All AI responses are sanitized and validated against Minecraft's Brigadier system before execution.
-
-- **Main Thread**: World Mutation, Registry Access, Recipe Lookups.
-- **Async Workers**: API calls, JSON Parsing, Transcript Cleaning.
-- **Netty**: Packet handling (C2S/S2C).
 </details>
 
 ---
 
 ## 🗺️ Roadmap
 
-The journey to true digital agency is just beginning. Here is where we're headed:
-
-- [x] **AI Vision (Screenshots)**: Allow the AI to "see" what you see via automated frame analysis.
-- [ ] **Multiplayer-Aware Memory**: Shared AI context that recognizes different players and their unique histories.
-- [ ] **Voice Synthesis (TTS)**: The AI talks back to you with custom, high-quality personality profiles.
-- [ ] **Plugin API**: A framework for creators to write custom behaviors/skills for the AI.
-- [ ] **Cross-Loader Support**: Bringing the companion to NeoForge/Forge.
+- [x] **AI Vision (Screenshots)**: Visual frame analysis.
+- [x] **3D Physical Agency**: World highlights and pointing.
+- [x] **Permission Guardrails**: Whitelist/Blacklist management.
+- [ ] **Multiplayer-Aware Memory**: Shared AI context between players.
+- [ ] **Voice Synthesis (TTS)**: The AI talks back to you.
+- [ ] **Plugin API**: Custom behaviors/skills for creators.
 
 ---
 

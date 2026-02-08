@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
@@ -15,11 +16,33 @@ import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.option.KeyBinding;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+import net.minecraft.client.render.Camera;
+import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.render.VertexConsumer;
+import net.minecraft.client.render.VertexConsumerProvider;
+import net.minecraft.client.render.WorldRenderer;
+import net.minecraft.client.render.BufferBuilder;
+import net.minecraft.client.render.BufferRenderer;
+import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.render.RenderPhase;
+import net.minecraft.client.render.Tessellator;
+import net.minecraft.client.render.VertexFormat;
+import net.minecraft.client.render.VertexFormats;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.texture.NativeImage;
+import net.minecraft.client.util.BufferAllocator;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.ScreenshotRecorder;
+import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.EntityHitResult;
+import net.minecraft.util.hit.HitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.entity.Entity;
+import net.minecraft.registry.Registries;
 import com.google.gson.JsonObject;
 import com.google.gson.Gson;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -80,6 +103,50 @@ public class GeminiCompanionClient implements ClientModInitializer {
 	private int levelIndex;
 	private float levelEma;
 	private long lastLevelMs;
+	private static final List<GeminiCompanion.Highlight> ACTIVE_HIGHLIGHTS = new ArrayList<>();
+	private static final BufferAllocator XRAY_ALLOCATOR = new BufferAllocator(1 << 18);
+
+	private static void drawHighlightBox(MatrixStack matrices, VertexConsumer buffer, Vec3d camPos, GeminiCompanion.Highlight h, double eps) {
+		matrices.push();
+		matrices.translate(h.x() - camPos.x, h.y() - camPos.y, h.z() - camPos.z);
+		float r = ((h.colorHex() >> 16) & 0xFF) / 255f;
+		float g = ((h.colorHex() >> 8) & 0xFF) / 255f;
+		float b = (h.colorHex() & 0xFF) / 255f;
+		float a = ((h.colorHex() >>> 24) & 0xFF) / 255f;
+		if (a <= 0f) {
+			a = 1.0f;
+		}
+		WorldRenderer.drawBox(
+			matrices,
+			buffer,
+			0 - eps, 0 - eps, 0 - eps,
+			1 + eps, 1 + eps, 1 + eps,
+			r, g, b, a
+		);
+		matrices.pop();
+	}
+
+	private static void drawHighlightBoxColored(MatrixStack matrices, VertexConsumer buffer, Vec3d camPos, GeminiCompanion.Highlight h, double eps, float r, float g, float b, float a) {
+		matrices.push();
+		matrices.translate(h.x() - camPos.x, h.y() - camPos.y, h.z() - camPos.z);
+		WorldRenderer.drawBox(
+			matrices,
+			buffer,
+			0 - eps, 0 - eps, 0 - eps,
+			1 + eps, 1 + eps, 1 + eps,
+			r, g, b, a
+		);
+		matrices.pop();
+	}
+
+	private static float brighten(float channel, float mul, float add) {
+		return Math.min(1.0f, channel * mul + add);
+	}
+
+	private static boolean isXrayHighlight(GeminiCompanion.Highlight h) {
+		int alpha = (h.colorHex() >>> 24) & 0xFF;
+		return alpha < 0xFF;
+	}
 
 	@Override
 	public void onInitializeClient() {
@@ -107,6 +174,71 @@ public class GeminiCompanionClient implements ClientModInitializer {
 
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
 			pendingSettingsSend = true;
+		});
+
+		ClientPlayNetworking.registerGlobalReceiver(GeminiCompanion.HighlightsPayloadS2C.ID, (payload, context) -> {
+			context.client().execute(() -> {
+				ACTIVE_HIGHLIGHTS.addAll(payload.highlights());
+			});
+		});
+
+		WorldRenderEvents.LAST.register(context -> {
+			if (ACTIVE_HIGHLIGHTS.isEmpty()) {
+				return;
+			}
+			long now = System.currentTimeMillis();
+			ACTIVE_HIGHLIGHTS.removeIf(h -> now > h.expiryMs());
+			if (ACTIVE_HIGHLIGHTS.isEmpty()) {
+				return;
+			}
+			MatrixStack matrices = context.matrixStack();
+			VertexConsumerProvider consumers = context.consumers();
+			Camera camera = context.camera();
+			Vec3d camPos = camera.getPos();
+			final double eps = 0.002;
+			VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
+			for (GeminiCompanion.Highlight h : ACTIVE_HIGHLIGHTS) {
+				if (isXrayHighlight(h)) {
+					continue;
+				}
+				drawHighlightBox(matrices, buffer, camPos, h, eps);
+			}
+
+			boolean hasXray = false;
+			for (GeminiCompanion.Highlight h : ACTIVE_HIGHLIGHTS) {
+				if (isXrayHighlight(h)) {
+					hasXray = true;
+					break;
+				}
+			}
+			if (hasXray) {
+				RenderSystem.disableDepthTest();
+				RenderSystem.depthMask(false);
+				RenderSystem.enableBlend();
+				RenderSystem.defaultBlendFunc();
+				RenderSystem.disableCull();
+				RenderSystem.setShader(GameRenderer::getRenderTypeLinesProgram);
+				RenderSystem.lineWidth(3.0f);
+				BufferBuilder builder = Tessellator.getInstance().begin(VertexFormat.DrawMode.LINES, VertexFormats.LINES);
+				for (GeminiCompanion.Highlight h : ACTIVE_HIGHLIGHTS) {
+					if (!isXrayHighlight(h)) {
+						continue;
+					}
+					drawHighlightBox(matrices, builder, camPos, h, eps);
+					float r = ((h.colorHex() >> 16) & 0xFF) / 255f;
+					float g = ((h.colorHex() >> 8) & 0xFF) / 255f;
+					float b = (h.colorHex() & 0xFF) / 255f;
+					float glowR = brighten(r, 1.25f, 0.15f);
+					float glowG = brighten(g, 1.25f, 0.15f);
+					float glowB = brighten(b, 1.25f, 0.15f);
+					drawHighlightBoxColored(matrices, builder, camPos, h, eps + 0.035, glowR, glowG, glowB, 0.55f);
+				}
+				BufferRenderer.drawWithGlobalProgram(builder.end());
+				RenderSystem.enableCull();
+				RenderSystem.disableBlend();
+				RenderSystem.depthMask(true);
+				RenderSystem.enableDepthTest();
+			}
 		});
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
@@ -394,14 +526,15 @@ public class GeminiCompanionClient implements ClientModInitializer {
 		if (client == null || client.getNetworkHandler() == null) {
 			return;
 		}
+		if (ClientPlayNetworking.canSend(GeminiCompanion.ChatForwardPayloadC2S.ID)) {
+			ClientPlayNetworking.send(new GeminiCompanion.ChatForwardPayloadC2S(command));
+			return;
+		}
 		Object handler = client.getNetworkHandler();
 		if (invokeSendChatCommand(handler, command)) {
 			return;
 		}
-		if (sendCommandPacket(handler, command)) {
-			return;
-		}
-		sendClientMessage("Unable to forward /chat command to server.");
+		sendClientMessage("Unable to forward /chat command to server (missing mod).");
 	}
 
 	private boolean invokeSendChatCommand(Object handler, String command) {
@@ -613,6 +746,7 @@ public class GeminiCompanionClient implements ClientModInitializer {
 		}
 		visionUiLabel = "Capturing...";
 		visionUiUntilMs = System.currentTimeMillis() + 1500;
+		String lookAt = buildLookAtContext(client);
 		NativeImage image = ScreenshotRecorder.takeScreenshot(client.getFramebuffer());
 		if (image == null) {
 			visionUiLabel = "Vision failed";
@@ -636,7 +770,7 @@ public class GeminiCompanionClient implements ClientModInitializer {
 				visionUiUntilMs = System.currentTimeMillis() + 2000;
 				return;
 			}
-			ClientPlayNetworking.send(new GeminiCompanion.VisionPayloadC2S(requestId, "image/png", png));
+			ClientPlayNetworking.send(new GeminiCompanion.VisionPayloadC2S(requestId, "image/png", lookAt, png));
 			visionUiLabel = "ANALYZING";
 			visionUiUntilMs = System.currentTimeMillis() + 3500;
 		} catch (Exception ignored) {
@@ -650,6 +784,28 @@ public class GeminiCompanionClient implements ClientModInitializer {
 				image.close();
 			}
 		}
+	}
+
+	private String buildLookAtContext(MinecraftClient client) {
+		if (client == null || client.world == null || client.player == null) {
+			return "";
+		}
+		HitResult hit = client.crosshairTarget;
+		if (hit == null || hit.getType() == HitResult.Type.MISS) {
+			return "";
+		}
+		if (hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult blockHit) {
+			BlockPos pos = blockHit.getBlockPos();
+			String blockId = Registries.BLOCK.getId(client.world.getBlockState(pos).getBlock()).toString();
+			return "Looking at block " + blockId + " @ " + pos.getX() + "," + pos.getY() + "," + pos.getZ();
+		}
+		if (hit.getType() == HitResult.Type.ENTITY && hit instanceof EntityHitResult entityHit) {
+			Entity entity = entityHit.getEntity();
+			String entityId = Registries.ENTITY_TYPE.getId(entity.getType()).toString();
+			return "Looking at entity " + entityId + " @ " +
+				String.format(Locale.ROOT, "%.1f,%.1f,%.1f", entity.getX(), entity.getY(), entity.getZ());
+		}
+		return "";
 	}
 
 	private NativeImage scaleToFit(NativeImage source, int maxWidth, int maxHeight) {

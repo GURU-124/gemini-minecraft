@@ -13,10 +13,13 @@ import com.mojang.brigadier.tree.CommandNode;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.scoreboard.Scoreboard;
 import net.minecraft.scoreboard.ScoreboardCriterion;
 import net.minecraft.util.math.BlockPos;
@@ -48,6 +51,13 @@ import net.minecraft.sound.SoundEvents;
 import net.minecraft.command.CommandSource;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.item.Item;
+import net.minecraft.item.tooltip.TooltipType;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.inventory.Inventory;
+import net.minecraft.registry.tag.TagKey;
 import net.minecraft.recipe.RecipeEntry;
 import net.minecraft.recipe.RecipeManager;
 import net.minecraft.recipe.RecipeType;
@@ -55,7 +65,9 @@ import net.minecraft.recipe.Recipe;
 import net.minecraft.recipe.Ingredient;
 import net.minecraft.world.gen.StructureAccessor;
 import net.minecraft.world.gen.structure.Structure;
+import net.minecraft.world.GameRules;
 import net.minecraft.util.Identifier;
+import net.minecraft.nbt.NbtCompound;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.minecraft.network.codec.PacketCodec;
@@ -66,6 +78,8 @@ import net.minecraft.structure.StructureStart;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.entity.damage.DamageSource;
@@ -105,24 +119,41 @@ public static final String MOD_ID = "gemini-ai-companion";
 	public static final Identifier VISION_PACKET_C2S = Identifier.of(MOD_ID, "vision_c2s");
 	public static final Identifier SETTINGS_PACKET_C2S = Identifier.of(MOD_ID, "settings_c2s");
 	public static final Identifier SETTINGS_APPLY_S2C = Identifier.of(MOD_ID, "settings_apply_s2c");
+	public static final Identifier CHAT_FORWARD_C2S = Identifier.of(MOD_ID, "chat_forward_c2s");
 	private static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 	private static final String API_KEY_ENV = "GEMINI_API_KEY";
 	private static final String GEMINI_ENDPOINT_BASE =
 		"https://generativelanguage.googleapis.com/v1beta/models/";
 	private static final String SYSTEM_PROMPT =
-		"You are an assistant inside Minecraft. Classify the user's request into one mode: ASK, PLAN, or COMMAND. " +
-		"Return ONLY a JSON object with fields: mode (ASK|PLAN|COMMAND), message (plain text), and commands (array). " +
+		"You are an assistant inside Minecraft. Classify the user's request into one mode: ASK, PLAN, COMMAND, CONTINUE, or TOOL. " +
+		"Return a JSON object with fields: mode (ASK|PLAN|COMMAND|CONTINUE|TOOL), message (plain text), and commands (array). " +
 		"For COMMAND mode, include one or more Minecraft commands in commands. For other modes, use an empty array. " +
-		"Do not include markdown, bullet lists, or code fences. Do not include extra fields. " +
+		"For CONTINUE, return the next step needed to finish the task; do not include commands. " +
+		"For multi-step tasks that require iterative steps (e.g. scanning, gathering, crafting), prefer CONTINUE with the next step. " +
+		"For TOOL mode, put skill commands in commands (e.g. chat skill inventory). The system will execute them and provide outputs; then answer in ASK/PLAN/COMMAND. " +
+		"If you say you will scan, search, check, inspect, locate, or look up something, you MUST use TOOL mode before answering. " +
+		"You may optionally include a highlights array to visually mark blocks: " +
+		"highlights=[{x,y,z,label,color,durationMs}]. Colors: red, green, blue, gold, purple, white. " +
+		"All highlights are always visible through blocks (x-ray by default). " +
+		"Avoid markdown, bullet lists, or code fences. Only include the JSON you were asked for (no extra prose). " +
 		"You can access the full player inventory context when it is provided; do not claim you lack inventory access. " +
 		"If you are unsure about the player's items or equipment, proactively issue /chat skill inventory before answering. " +
-		"If you need extra data, you may issue /chat skill inventory, /chat skill nearby, /chat skill stats, /chat skill players, /chat skill settings, or /chat skill nbt <mainhand|offhand|slot N>. " +
+		"If you need extra data, you may issue skill commands in commands exactly like a normal command (no leading slash). " +
+		"Skill usage examples: chat skill inventory; chat skill nearby; chat skill stats; chat skill players; chat skill settings; " +
+		"chat skill settings video; chat skill settings controls; chat skill lookup mainhand; chat skill lookup slot 4; " +
+		"chat skill nbt mainhand; chat skill nbt slot 7; chat skill blocks minecraft:diamond_ore 32; " +
+		"chat skill blocks #minecraft:logs 24; chat skill containers 32; chat skill containers minecraft:barrel 24; " +
+		"chat skill blockdata 12 64 -30; chat skill blockdata nearest minecraft:chest 24; chat skill blockdata minecraft:chest nearest 24; " +
+		"chat skill recipe minecraft:hopper; chat skill smelt minecraft:raw_iron. " +
+		"When you receive skill output, treat it as trusted context and answer directly using it. You do not need to repeat the full data, only relevant parts. " +
+		"If a user asks about what is inside a chest/container, always use chat skill blockdata nearest minecraft:chest <radius> first. " +
+		"If a user asks where a chest/container is, use chat skill containers <radius> and then highlight the nearest match. " +
+		"If a user asks to highlight/find a block or ore, use chat skill blocks <block or #tag> <radius>. " +
 		"To change client settings or keybinds, use /chat setsetting <key> <value> and wait for the confirmation prompt. " +
 		"Do NOT use any /options command. " +
-		"/chat skill recipe <item> returns all matching recipes across vanilla and modded recipe types with ingredients. " +
-		"/chat skill smelt <item> returns cooking recipes only. " +
+		"chat skill recipe <item> returns all matching recipes across vanilla and modded recipe types with ingredients. " +
+		"chat skill smelt <item> returns cooking recipes only. " +
 		"If the user asks about what they see or to analyze the view, you will receive the player's current screenshot automatically. " +
-		"After skill output is returned, continue the task using that data. " +
 		"Minecraft version rules: Items use COMPONENTS, not old NBT. " +
 		"Enchantments use: enchantments={levels:{\"minecraft:enchantment\":level}}. " +
 		"Old tags like Enchantments, lvl, Damage are FORBIDDEN. " +
@@ -147,6 +178,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 	private static final Set<UUID> AI_WHITELIST = ConcurrentHashMap.newKeySet();
 	private static PermissionMode PERMISSION_MODE = PermissionMode.OPS;
 	private static boolean SETUP_COMPLETE = false;
+	private static final Map<UUID, Long> SETUP_WARN_COOLDOWN = new ConcurrentHashMap<>();
 	private static final Map<UUID, ModelPreference> MODEL_PREFERENCES = new ConcurrentHashMap<>();
 	private static final Map<UUID, ParticleSetting> PARTICLE_SETTINGS = new ConcurrentHashMap<>();
 	private static final Set<UUID> SOUND_DISABLED = ConcurrentHashMap.newKeySet();
@@ -165,6 +197,13 @@ public static final String MOD_ID = "gemini-ai-companion";
 	private static final Set<UUID> COMMAND_DEBUG_ENABLED = ConcurrentHashMap.newKeySet();
 	private static final Map<UUID, Integer> COMMAND_RETRY_LIMITS = new ConcurrentHashMap<>();
 	private static final int MAX_CONTEXT_TOKENS = 16000;
+	private static final int COMMAND_MODIFICATION_LIMIT = 2_097_152;
+	private static final int DEFAULT_BLOCK_SCAN_RADIUS = 24;
+	private static final int MAX_BLOCK_SCAN_POSITIONS = 512_000;
+	private static final int MAX_BLOCK_SCAN_RESULTS = 12;
+	private static final int MAX_CONTAINER_RESULTS = 8;
+	private static final int MAX_CONTINUE_STEPS = 5;
+	private static final int MAX_TOOL_STEPS = 4;
 	private static final int HISTORY_EXCHANGES_PER_PAGE = 3;
 	private static final boolean SIDEBAR_DEFAULT_ENABLED = true;
 	private static boolean SIDEBAR_ENABLED = SIDEBAR_DEFAULT_ENABLED;
@@ -260,6 +299,41 @@ public static final String MOD_ID = "gemini-ai-companion";
 						.executes(context -> runChatSkill(context.getSource(), "inventory", null)))
 					.then(CommandManager.literal("nearby")
 						.executes(context -> runChatSkill(context.getSource(), "nearby", null)))
+					.then(CommandManager.literal("blocks")
+						.then(CommandManager.argument("target", StringArgumentType.string())
+							.executes(context -> runChatSkill(
+								context.getSource(),
+								"blocks",
+								StringArgumentType.getString(context, "target")))
+							.then(CommandManager.argument("radius", IntegerArgumentType.integer(1))
+								.executes(context -> runChatSkill(
+									context.getSource(),
+									"blocks",
+									StringArgumentType.getString(context, "target") + " " + IntegerArgumentType.getInteger(context, "radius"))))))
+					.then(CommandManager.literal("containers")
+						.executes(context -> runChatSkill(context.getSource(), "containers", null))
+						.then(CommandManager.argument("filter", StringArgumentType.string())
+							.executes(context -> runChatSkill(
+								context.getSource(),
+								"containers",
+								StringArgumentType.getString(context, "filter")))
+							.then(CommandManager.argument("radius", IntegerArgumentType.integer(1))
+								.executes(context -> runChatSkill(
+									context.getSource(),
+									"containers",
+									StringArgumentType.getString(context, "filter") + " " + IntegerArgumentType.getInteger(context, "radius")))))
+						.then(CommandManager.argument("radius", IntegerArgumentType.integer(1))
+							.executes(context -> runChatSkill(
+								context.getSource(),
+								"containers",
+								String.valueOf(IntegerArgumentType.getInteger(context, "radius"))))))
+					.then(CommandManager.literal("blockdata")
+						.executes(context -> runChatSkill(context.getSource(), "blockdata", null))
+						.then(CommandManager.argument("args", StringArgumentType.greedyString())
+							.executes(context -> runChatSkill(
+								context.getSource(),
+								"blockdata",
+								StringArgumentType.getString(context, "args")))))
 					.then(CommandManager.literal("players")
 						.executes(context -> runChatSkill(context.getSource(), "players", null)))
 					.then(CommandManager.literal("stats")
@@ -283,6 +357,13 @@ public static final String MOD_ID = "gemini-ai-companion";
 								context.getSource(),
 								"smelt",
 								StringArgumentType.getString(context, "item")))))
+					.then(CommandManager.literal("lookup")
+						.executes(context -> runChatSkill(context.getSource(), "lookup", null))
+						.then(CommandManager.argument("target", StringArgumentType.word())
+							.executes(context -> runChatSkill(
+								context.getSource(),
+								"lookup",
+								StringArgumentType.getString(context, "target")))))
 					.then(CommandManager.literal("nbt")
 						.executes(context -> runChatSkill(context.getSource(), "nbt", null))
 						.then(CommandManager.argument("target", StringArgumentType.word())
@@ -394,6 +475,8 @@ public static final String MOD_ID = "gemini-ai-companion";
 				.then(CommandManager.argument("topic", StringArgumentType.word())
 					.executes(context -> showChatHelp(context.getSource(), StringArgumentType.getString(context, "topic")))));
 		});
+
+		ServerLifecycleEvents.SERVER_STARTED.register(GeminiCompanion::applyCommandModificationLimit);
 
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			if (THINKING_TICKS.isEmpty()) {
@@ -510,6 +593,8 @@ public static final String MOD_ID = "gemini-ai-companion";
 		PayloadTypeRegistry.playC2S().register(VisionPayloadC2S.ID, VisionPayloadC2S.CODEC);
 		PayloadTypeRegistry.playC2S().register(SettingsPayloadC2S.ID, SettingsPayloadC2S.CODEC);
 		PayloadTypeRegistry.playS2C().register(SettingsApplyPayloadS2C.ID, SettingsApplyPayloadS2C.CODEC);
+		PayloadTypeRegistry.playS2C().register(HighlightsPayloadS2C.ID, HighlightsPayloadS2C.CODEC);
+		PayloadTypeRegistry.playC2S().register(ChatForwardPayloadC2S.ID, ChatForwardPayloadC2S.CODEC);
 		ServerPlayNetworking.registerGlobalReceiver(ConfigPayloadC2S.ID, (payload, context) -> {
 			handleConfigPacket(context.server(), context.player(), payload.json());
 		});
@@ -525,10 +610,37 @@ public static final String MOD_ID = "gemini-ai-companion";
 		ServerPlayNetworking.registerGlobalReceiver(SettingsPayloadC2S.ID, (payload, context) -> {
 			context.server().execute(() -> handleSettingsPayload(context.player(), payload));
 		});
+		ServerPlayNetworking.registerGlobalReceiver(ChatForwardPayloadC2S.ID, (payload, context) -> {
+			context.server().execute(() -> handleChatForward(context.player(), payload));
+		});
+	}
+
+	private static void handleChatForward(ServerPlayerEntity player, ChatForwardPayloadC2S payload) {
+		if (player == null || payload == null) {
+			return;
+		}
+		String text = payload.text();
+		if (text == null || text.isBlank()) {
+			return;
+		}
+		String trimmed = text.trim();
+		if (trimmed.startsWith("/")) {
+			trimmed = trimmed.substring(1).trim();
+		}
+		if (!trimmed.toLowerCase(Locale.ROOT).startsWith("chat")) {
+			return;
+		}
+		player.getServer().getCommandManager().executeWithPrefix(player.getCommandSource(), trimmed);
 	}
 
 	private static int handleChatCommand(ServerCommandSource source, String prompt, boolean forceVision) {
 		if (!isSetupComplete(source)) {
+			ServerPlayerEntity player = source.getPlayer();
+			if (player != null) {
+				sendSetupReminder(player);
+			} else {
+				source.sendFeedback(() -> Text.literal("Gemini AI is not configured. Run /chat setup to begin."), false);
+			}
 			return 0;
 		}
 		if (!canUseAi(source)) {
@@ -683,6 +795,15 @@ public static final String MOD_ID = "gemini-ai-companion";
 			VISION_STATE.remove(player.getUuid());
 			return;
 		}
+		if (payload.lookAt() != null && !payload.lookAt().isBlank()) {
+			request = new VisionRequest(
+				request.prompt,
+				request.context + "\n" + payload.lookAt(),
+				request.apiKey,
+				request.overrideModel,
+				request.createdMs
+			);
+		}
 		byte[] image = payload.data();
 		if (image == null || image.length == 0) {
 			player.sendMessage(Text.literal("Vision capture failed."), false);
@@ -695,8 +816,9 @@ public static final String MOD_ID = "gemini-ai-companion";
 			return;
 		}
 		VISION_STATE.put(player.getUuid(), "ANALYZING");
+		VisionRequest finalRequest = request;
 		CompletableFuture<Void> future = CompletableFuture.runAsync(() ->
-			handleGeminiVisionFlow(player, request, payload.mimeType(), image)
+			handleGeminiVisionFlow(player, finalRequest, payload.mimeType(), image)
 		);
 		RequestState state = REQUEST_STATES.get(player.getUuid());
 		if (state != null) {
@@ -750,25 +872,18 @@ public static final String MOD_ID = "gemini-ai-companion";
 		updateSidebar(player, stats);
 
 		ModeMessage reply = callGeminiVisionSafely(request.apiKey, prompt, context, history, mimeType, imageBytes, modelChoice);
+		reply = applyXrayOverride(reply, prompt);
 		if (state != null && state.cancelled.get()) {
 			VISION_STATE.remove(player.getUuid());
 			return;
 		}
 
-		if (player != null && reply.commands.isEmpty()) {
-			String autoSkill = selectAutoSkillCommand(prompt, reply.message);
-			if (autoSkill != null) {
-				setStatus(player, "Gathering data...", Formatting.AQUA);
-				String skillOutput = executeSkillCommand(player, autoSkill, true);
-				String cleaned = stripSkillPrefix(skillOutput);
-				String skillContext = "Skill output: " + cleaned + "\nContinue the task using this data. Respond with JSON only.";
-				reply = callGeminiSafely(request.apiKey, prompt, context, history, skillContext, modelChoice);
-				if (state != null && state.cancelled.get()) {
-					VISION_STATE.remove(player.getUuid());
-					return;
-				}
-			}
+		reply = maybeRequestToolFromReply(player, request.apiKey, prompt, context, history, reply, modelChoice);
+		if ("TOOL".equals(reply.mode) && player != null) {
+			reply = handleToolMode(player, request.apiKey, prompt, context, history, reply, modelChoice);
 		}
+
+		reply = handleContinueLoop(player, request.apiKey, prompt, context, history, reply, modelChoice);
 
 		final boolean[] planAlreadySent = new boolean[] { false };
 		if ("PLAN".equals(reply.mode)) {
@@ -796,6 +911,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 		if ("COMMAND".equals(reply.mode)) {
 			reply = handleCommandMode(player.getCommandSource(), player, request.apiKey, prompt, context, history, reply, modelChoice);
 		}
+		reply = handleContinueLoop(player, request.apiKey, prompt, context, history, reply, modelChoice);
 
 		long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
 		ModeMessage finalReply = reply;
@@ -811,36 +927,42 @@ public static final String MOD_ID = "gemini-ai-companion";
 			if (!finalReply.message.startsWith("Error:")) {
 				MODE_STATE.put(player.getUuid(), new ModeState(modeLabel(finalReply.mode), modeColor(finalReply.mode), 60));
 			}
+			ModeMessage displayReply = finalReply;
+			if ("COMMAND".equals(displayReply.mode) && filterExecutableCommands(displayReply.commands, player).isEmpty()) {
+				displayReply = new ModeMessage("ASK", displayReply.message, List.of(), displayReply.searchUsed, displayReply.sources, displayReply.highlights);
+			}
 			AiStats statsDone = getStats(player.getUuid());
-			statsDone.mode = finalReply.mode;
+			statsDone.mode = displayReply.mode;
 			statsDone.lastResponseMs = elapsedMs;
 			statsDone.recordResponseTime(elapsedMs);
-			statsDone.state = finalReply.searchUsed ? "SEARCHING" : resolveState(finalReply.message);
-			if (planAlreadySent[0] && "COMMAND".equals(finalReply.mode)) {
+			statsDone.state = displayReply.searchUsed ? "SEARCHING" : resolveState(displayReply.message);
+			if (planAlreadySent[0] && "COMMAND".equals(displayReply.mode)) {
 				statsDone.state = "EXECUTING";
 			}
 			statsDone.contextSize = history.size();
 			statsDone.tokenPercent = estimateTokenPercent(contextForStats, history, prompt);
-			if (!finalReply.message.startsWith("Error:")) {
-				statsDone.sessionTokens += estimateTokens(finalReply.message);
+			if (!displayReply.message.startsWith("Error:")) {
+				statsDone.sessionTokens += estimateTokens(displayReply.message);
 			}
 			updateSidebar(player, statsDone);
 
-			if (finalReply.message.startsWith("Error:")) {
-				player.sendMessage(Text.literal(finalReply.message), false);
+			sendHighlights(player, displayReply.highlights);
+
+			if (displayReply.message.startsWith("Error:")) {
+				player.sendMessage(Text.literal(displayReply.message), false);
 			} else {
-				boolean skipMessage = planAlreadySent[0] && "PLAN".equals(finalReply.mode);
+				boolean skipMessage = planAlreadySent[0] && "PLAN".equals(displayReply.mode);
 				if (!skipMessage) {
-					MutableText message = Text.literal(finalReply.message);
-					if (finalReply.mode.equals("ASK")) {
+					MutableText message = Text.literal(displayReply.message);
+					if (displayReply.mode.equals("ASK")) {
 						player.sendMessage(message, false);
 					} else {
-						MutableText prefix = buildModeChip(finalReply.mode);
+						MutableText prefix = buildModeChip(displayReply.mode);
 						player.sendMessage(prefix.append(message), false);
 					}
 				}
 			}
-			emitFeedbackEffects(player, finalReply);
+			emitFeedbackEffects(player, displayReply);
 		});
 	}
 
@@ -1100,60 +1222,91 @@ public static final String MOD_ID = "gemini-ai-companion";
 		ServerPlayNetworking.send(player, new VisionRequestPayloadS2C(now));
 	}
 
-	private static String selectAutoSkillCommand(String prompt, String replyMessage) {
-		String combined = (prompt == null ? "" : prompt) + " " + (replyMessage == null ? "" : replyMessage);
-		String lower = combined.toLowerCase(Locale.ROOT);
+	private static void sendDebugMessage(ServerPlayerEntity player, String message) {
+		if (player == null || message == null || message.isBlank()) {
+			return;
+		}
+		if (!COMMAND_DEBUG_ENABLED.contains(player.getUuid())) {
+			return;
+		}
+		player.sendMessage(Text.literal("[Debug] " + message).formatted(Formatting.GRAY), false);
+		LOGGER.info("Debug [{}]: {}", player.getName().getString(), message);
+	}
+
+	private static String limitDebugOutput(String text) {
+		if (text == null) {
+			return "";
+		}
+		int max = 320;
+		String trimmed = text.trim();
+		if (trimmed.length() <= max) {
+			return trimmed;
+		}
+		return trimmed.substring(0, max) + "...";
+	}
+
+	private static List<String> filterExecutableCommands(List<String> commands, ServerPlayerEntity player) {
+		if (commands == null || commands.isEmpty()) {
+			return List.of();
+		}
+		List<String> out = new ArrayList<>();
+		int filtered = 0;
+		for (String raw : commands) {
+			if (raw == null || raw.isBlank()) {
+				continue;
+			}
+			String sanitized = sanitizeCommand(raw);
+			if (sanitized.isBlank()) {
+				continue;
+			}
+			if (isSkillCommand(sanitized) || isSettingChangeCommand(sanitized)) {
+				out.add(sanitized);
+				continue;
+			}
+			if (isLikelySentence(sanitized)) {
+				filtered++;
+				continue;
+			}
+			out.add(sanitized);
+		}
+		if (filtered > 0) {
+			sendDebugMessage(player, "Filtered " + filtered + " non-command line(s).");
+		}
+		return out;
+	}
+
+	private static boolean isLikelySentence(String command) {
+		if (command == null) {
+			return true;
+		}
+		String lower = command.trim().toLowerCase(Locale.ROOT);
 		if (lower.isBlank()) {
-			return null;
+			return true;
 		}
-		if (lower.contains("need to check") || lower.contains("i should check") || lower.contains("let me check")
-			|| lower.contains("i will check") || lower.contains("i need to check")) {
-			if (lower.contains("armor") || lower.contains("enchant") || lower.contains("equipment") || lower.contains("gear")) {
-				return "chat skill inventory";
-			}
-			if (lower.contains("inventory") || lower.contains("items") || lower.contains("what do i have") || lower.contains("what's in")) {
-				return "chat skill inventory";
-			}
-			if (lower.contains("nearby") || lower.contains("around me") || lower.contains("entities")) {
-				return "chat skill nearby";
-			}
-			if (lower.contains("players online") || lower.contains("who is online") || lower.contains("online players")
-				|| lower.contains("player list") || lower.contains("who is here")) {
-				return "chat skill players";
-			}
-			if (lower.contains("settings") || lower.contains("options") || lower.contains("video settings")
-				|| lower.contains("graphics") || lower.contains("render distance") || lower.contains("fov")
-				|| lower.contains("controls") || lower.contains("keybind") || lower.contains("sensitivity")) {
-				if (lower.contains("video") || lower.contains("graphics") || lower.contains("render")) {
-					return "chat skill settings video";
-				}
-				if (lower.contains("control") || lower.contains("keybind") || lower.contains("keybinds") || lower.contains("keys")) {
-					return "chat skill settings controls";
-				}
-				return "chat skill settings";
-			}
-			if (lower.contains("health") || lower.contains("hp") || lower.contains("status") || lower.contains("buff")) {
-				return "chat skill stats";
-			}
-			if (lower.contains("nbt") || lower.contains("components")) {
-				return "chat skill nbt mainhand";
-			}
+		if (lower.endsWith(".") || lower.endsWith("?")) {
+			return true;
 		}
-		if (isInventoryQuery(prompt)) {
-			return "chat skill inventory";
+		if (lower.startsWith("i ") || lower.startsWith("im ") || lower.startsWith("i'm")
+			|| lower.startsWith("i am") || lower.startsWith("i will") || lower.startsWith("i'll")
+			|| lower.startsWith("scanning") || lower.startsWith("searching") || lower.startsWith("looking")
+			|| lower.startsWith("expanding") || lower.startsWith("checking")) {
+			return true;
 		}
-		if (prompt != null) {
-			String lowerPrompt = prompt.toLowerCase(Locale.ROOT);
-			if (lowerPrompt.contains("players online") || lowerPrompt.contains("who is online")
-				|| lowerPrompt.contains("online players") || lowerPrompt.contains("player list")) {
-				return "chat skill players";
-			}
-			if (lowerPrompt.contains("settings") || lowerPrompt.contains("options") || lowerPrompt.contains("keybind")
-				|| lowerPrompt.contains("controls") || lowerPrompt.contains("graphics") || lowerPrompt.contains("video settings")) {
-				return "chat skill settings";
-			}
+		if (lower.contains(" for you") || lower.contains("please") || lower.contains("i am ")) {
+			return true;
 		}
-		return null;
+		return false;
+	}
+
+	private static boolean isContainerSearchIntent(String text) {
+		if (text == null || text.isBlank()) {
+			return false;
+		}
+		String lower = text.toLowerCase(Locale.ROOT);
+		if (!containsAny(lower, "chest", "barrel", "shulker", "container", "containers", "storage", "crate", "hopper", "minecart")) {
+			return false;
+		}
+		return containsAny(lower, "search", "scan", "scanning", "looking", "locate", "find", "finding", "nearest", "closest", "expand", "expanding");
 	}
 
 	private static String stripSkillPrefix(String output) {
@@ -1759,14 +1912,41 @@ public static final String MOD_ID = "gemini-ai-companion";
 		}
 	}
 
-	public record VisionPayloadC2S(long requestId, String mimeType, byte[] data) implements CustomPayload {
+	public record VisionPayloadC2S(long requestId, String mimeType, String lookAt, byte[] data) implements CustomPayload {
 		public static final Id<VisionPayloadC2S> ID = new Id<>(VISION_PACKET_C2S);
 		public static final PacketCodec<RegistryByteBuf, VisionPayloadC2S> CODEC =
 			PacketCodec.tuple(
 				PacketCodecs.VAR_LONG, VisionPayloadC2S::requestId,
 				PacketCodecs.STRING, VisionPayloadC2S::mimeType,
+				PacketCodecs.STRING, VisionPayloadC2S::lookAt,
 				PacketCodecs.BYTE_ARRAY, VisionPayloadC2S::data,
 				VisionPayloadC2S::new
+			);
+
+		@Override
+		public Id<? extends CustomPayload> getId() {
+			return ID;
+		}
+	}
+
+public record Highlight(double x, double y, double z, String label, int colorHex, long expiryMs) {}
+
+	public record HighlightsPayloadS2C(List<Highlight> highlights) implements CustomPayload {
+		public static final Identifier ID_VALUE = Identifier.of(MOD_ID, "highlights_s2c");
+		public static final Id<HighlightsPayloadS2C> ID = new Id<>(ID_VALUE);
+		public static final PacketCodec<RegistryByteBuf, HighlightsPayloadS2C> CODEC =
+			PacketCodec.tuple(
+				PacketCodecs.collection(ArrayList::new, PacketCodec.tuple(
+					PacketCodecs.DOUBLE, Highlight::x,
+					PacketCodecs.DOUBLE, Highlight::y,
+					PacketCodecs.DOUBLE, Highlight::z,
+					PacketCodecs.STRING, Highlight::label,
+					PacketCodecs.INTEGER, Highlight::colorHex,
+					PacketCodecs.VAR_LONG, Highlight::expiryMs,
+					Highlight::new
+				)),
+				HighlightsPayloadS2C::highlights,
+				HighlightsPayloadS2C::new
 			);
 
 		@Override
@@ -1804,6 +1984,17 @@ public static final String MOD_ID = "gemini-ai-companion";
 		}
 	}
 
+	public record ChatForwardPayloadC2S(String text) implements CustomPayload {
+		public static final Id<ChatForwardPayloadC2S> ID = new Id<>(CHAT_FORWARD_C2S);
+		public static final PacketCodec<RegistryByteBuf, ChatForwardPayloadC2S> CODEC =
+			PacketCodec.tuple(PacketCodecs.STRING, ChatForwardPayloadC2S::text, ChatForwardPayloadC2S::new);
+
+		@Override
+		public Id<? extends CustomPayload> getId() {
+			return ID;
+		}
+	}
+
 	private static int showChatHelp(ServerCommandSource source, String topic) {
 		if (topic == null || topic.isBlank()) {
 			source.sendFeedback(() -> Text.literal("Chat AI Help:"), false);
@@ -1815,7 +2006,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 			source.sendFeedback(() -> Text.literal("/chat history [count|all] [page] - Show recent exchanges."), false);
 			source.sendFeedback(() -> Text.literal("/chat export [count|all] [txt|json] - Save chat log."), false);
 			source.sendFeedback(() -> Text.literal("/chat config - Show settings menu."), false);
-			source.sendFeedback(() -> Text.literal("/chat skill <inventory|nearby|players|stats|nbt|recipe|smelt> - Run a skill."), false);
+			source.sendFeedback(() -> Text.literal("/chat skill <inventory|nearby|blocks|containers|blockdata|players|stats|lookup|nbt|recipe|smelt> - Run a skill."), false);
 			source.sendFeedback(() -> Text.literal("/chatdebug on|off - Show executed commands/output."), false);
 			source.sendFeedback(() -> Text.literal("/chatsidebar on|off - Toggle the sidebar stats."), false);
 			source.sendFeedback(() -> Text.literal("/chatsounds on|off - Toggle AI sounds."), false);
@@ -1865,9 +2056,13 @@ public static final String MOD_ID = "gemini-ai-companion";
 			case "skill":
 				source.sendFeedback(() -> Text.literal("/chat skill inventory - List inventory summary."), false);
 				source.sendFeedback(() -> Text.literal("/chat skill nearby - List nearby entities."), false);
+			source.sendFeedback(() -> Text.literal("/chat skill blocks <block|#tag> [radius] - Scan nearby blocks."), false);
+			source.sendFeedback(() -> Text.literal("/chat skill containers [filter] [radius] - Scan nearby containers + contents."), false);
+			source.sendFeedback(() -> Text.literal("/chat skill blockdata <x y z | nearest [block|#tag] [radius]> - Full block NBT."), false);
 				source.sendFeedback(() -> Text.literal("/chat skill players - List online players with coords."), false);
 				source.sendFeedback(() -> Text.literal("/chat skill settings [video|controls|all] - Read full options + keybinds."), false);
 				source.sendFeedback(() -> Text.literal("/chat skill stats - Show health, armor, buffs, XP."), false);
+				source.sendFeedback(() -> Text.literal("/chat skill lookup <mainhand|offhand|slot N> - Item tooltip analysis."), false);
 				source.sendFeedback(() -> Text.literal("/chat skill nbt <mainhand|offhand|slot N> - Inspect components."), false);
 				source.sendFeedback(() -> Text.literal("/chat skill recipe <item> | /chat skill smelt <item> - Find recipes."), false);
 				break;
@@ -1951,19 +2146,13 @@ public static final String MOD_ID = "gemini-ai-companion";
 			return;
 		}
 
-		if (player != null && reply.commands.isEmpty()) {
-			String autoSkill = selectAutoSkillCommand(prompt, reply.message);
-			if (autoSkill != null) {
-				setStatus(player, "Gathering data...", Formatting.AQUA);
-				String skillOutput = executeSkillCommand(player, autoSkill, true);
-				String cleaned = stripSkillPrefix(skillOutput);
-				String skillContext = "Skill output: " + cleaned + "\nContinue the task using this data. Respond with JSON only.";
-				reply = callGeminiSafely(apiKey, prompt, context, history, skillContext, modelChoice);
-				if (state != null && state.cancelled.get()) {
-					return;
-				}
-			}
+		reply = maybeRequestToolFromReply(player, apiKey, prompt, context, history, reply, modelChoice);
+		if ("TOOL".equals(reply.mode) && player != null) {
+			reply = handleToolMode(player, apiKey, prompt, context, history, reply, modelChoice);
 		}
+
+		reply = handleContinueLoop(player, apiKey, prompt, context, history, reply, modelChoice);
+		reply = applyXrayOverride(reply, prompt);
 
 		final boolean[] planAlreadySent = new boolean[] { false };
 		if ("PLAN".equals(reply.mode) && player != null) {
@@ -1994,9 +2183,17 @@ public static final String MOD_ID = "gemini-ai-companion";
 		if ("COMMAND".equals(reply.mode) && player != null) {
 			reply = handleCommandMode(source, player, apiKey, prompt, context, history, reply, modelChoice);
 		}
+		reply = handleContinueLoop(player, apiKey, prompt, context, history, reply, modelChoice);
+		reply = applyXrayOverride(reply, prompt);
 
 		long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
 		ModeMessage finalReply = reply;
+		ModeMessage displayReply = finalReply;
+		if (player != null && "COMMAND".equals(displayReply.mode)
+			&& filterExecutableCommands(displayReply.commands, player).isEmpty()) {
+			displayReply = new ModeMessage("ASK", displayReply.message, List.of(), displayReply.searchUsed, displayReply.sources, displayReply.highlights);
+		}
+		ModeMessage finalDisplayReply = displayReply;
 		String contextForStats = context;
 		source.getServer().execute(() -> {
 			if (state != null && state.cancelled.get()) {
@@ -2011,36 +2208,40 @@ public static final String MOD_ID = "gemini-ai-companion";
 				}
 
 				AiStats stats = getStats(player.getUuid());
-				stats.mode = finalReply.mode;
+				stats.mode = finalDisplayReply.mode;
 				stats.lastResponseMs = elapsedMs;
 				stats.recordResponseTime(elapsedMs);
-				stats.state = finalReply.searchUsed ? "SEARCHING" : resolveState(finalReply.message);
-				if (planAlreadySent[0] && "COMMAND".equals(finalReply.mode)) {
+				stats.state = finalDisplayReply.searchUsed ? "SEARCHING" : resolveState(finalDisplayReply.message);
+				if (planAlreadySent[0] && "COMMAND".equals(finalDisplayReply.mode)) {
 					stats.state = "EXECUTING";
 				}
 				stats.contextSize = history.size();
 				stats.tokenPercent = estimateTokenPercent(contextForStats, history, prompt);
-				if (!finalReply.message.startsWith("Error:")) {
-					stats.sessionTokens += estimateTokens(finalReply.message);
+				if (!finalDisplayReply.message.startsWith("Error:")) {
+					stats.sessionTokens += estimateTokens(finalDisplayReply.message);
 				}
 				updateSidebar(player, stats);
 			}
 
-			if (finalReply.message.startsWith("Error:")) {
-				source.sendError(Text.literal(finalReply.message));
+			if (player != null) {
+				sendHighlights(player, finalDisplayReply.highlights);
+			}
+
+			if (finalDisplayReply.message.startsWith("Error:")) {
+				source.sendError(Text.literal(finalDisplayReply.message));
 			} else {
-				boolean skipMessage = planAlreadySent[0] && "PLAN".equals(finalReply.mode);
+				boolean skipMessage = planAlreadySent[0] && "PLAN".equals(finalDisplayReply.mode);
 				if (!skipMessage) {
-					MutableText message = Text.literal(finalReply.message);
-					if (finalReply.mode.equals("ASK")) {
+					MutableText message = Text.literal(finalDisplayReply.message);
+					if (finalDisplayReply.mode.equals("ASK")) {
 						MutableText prefix = buildModeChip("ASK");
 						source.sendFeedback(() -> prefix.append(message), false);
 					} else {
-						MutableText prefix = buildModeChip(finalReply.mode);
+						MutableText prefix = buildModeChip(finalDisplayReply.mode);
 						source.sendFeedback(() -> prefix.append(message), false);
-						if (finalReply.mode.equals("COMMAND") && shouldShowCommandDebug(player)
-							&& finalReply.commands != null && !finalReply.commands.isEmpty()) {
-							List<String> filtered = filterSkillCommands(finalReply.commands);
+						if (finalDisplayReply.mode.equals("COMMAND") && shouldShowCommandDebug(player)
+							&& finalDisplayReply.commands != null && !finalDisplayReply.commands.isEmpty()) {
+							List<String> filtered = filterSkillCommands(finalDisplayReply.commands);
 							if (!filtered.isEmpty()) {
 								String commandText = String.join(" | ", filtered);
 								MutableText commandLine = Text.literal("Commands: " + commandText).formatted(Formatting.DARK_GRAY);
@@ -2131,16 +2332,21 @@ public static final String MOD_ID = "gemini-ai-companion";
 		ModelChoice modelChoice
 	) {
 		ModeMessage current = initial;
+		String lastSkillOutput = null;
 		int steps = 0;
 		int retryLimit = getRetryLimit(player);
 		for (int attempt = 1; attempt <= retryLimit; attempt++) {
 			setRetryStats(player, attempt - 1);
-			PreparedCommands prepared = prepareCommandsForExecution(player, current.commands);
+			List<String> executableCommands = filterExecutableCommands(current.commands, player);
+			if (executableCommands.isEmpty()) {
+				return new ModeMessage("ASK", current.message, List.of(), current.searchUsed, current.sources, current.highlights);
+			}
+			PreparedCommands prepared = prepareCommandsForExecution(player, executableCommands);
 			CommandResult validation = validateCommands(player, prepared.executeCommands);
 			if (!validation.success) {
 				if (attempt == retryLimit) {
 					LOGGER.info("AI retry exhausted for player {}. Validation errors: {}", player.getName().getString(), validation.errorSummary);
-					return new ModeMessage("COMMAND", "AI could not produce valid commands after several tries.", List.of(), false, List.of());
+					return new ModeMessage("COMMAND", "AI could not produce valid commands after several tries.", List.of(), false, List.of(), List.of());
 				}
 
 				LOGGER.info("AI command retry {}/{} for player {}. Validation errors: {}", attempt, retryLimit, player.getName().getString(), validation.errorSummary);
@@ -2181,7 +2387,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 
 			if (attempt == retryLimit) {
 				LOGGER.info("AI retry exhausted for player {}. Last errors: {}", player.getName().getString(), result.errorSummary);
-				return new ModeMessage("COMMAND", "AI could not complete the command after several tries.", List.of(), false, List.of());
+				return new ModeMessage("COMMAND", "AI could not complete the command after several tries.", List.of(), false, List.of(), List.of());
 			}
 
 			LOGGER.info("AI command retry {}/{} for player {}. Errors: {}", attempt, retryLimit, player.getName().getString(), result.errorSummary);
@@ -2193,7 +2399,185 @@ public static final String MOD_ID = "gemini-ai-companion";
 			}
 		}
 
+		if (lastSkillOutput != null && !lastSkillOutput.isBlank()) {
+			return new ModeMessage("ASK", lastSkillOutput, List.of(), current.searchUsed, current.sources, current.highlights);
+		}
 		return current;
+	}
+
+	private static ModeMessage handleToolMode(
+		ServerPlayerEntity player,
+		String apiKey,
+		String prompt,
+		String context,
+		List<ChatTurn> history,
+		ModeMessage initial,
+		ModelChoice modelChoice
+	) {
+		ModeMessage current = initial;
+		int steps = 0;
+		while ("TOOL".equals(current.mode) && steps < MAX_TOOL_STEPS) {
+			steps++;
+			if (player == null) {
+				return new ModeMessage("ASK", current.message, List.of(), current.searchUsed, current.sources, current.highlights);
+			}
+			if (current.commands == null || current.commands.isEmpty()) {
+				return new ModeMessage("ASK", "No tool commands provided.", List.of(), current.searchUsed, current.sources, current.highlights);
+			}
+			List<String> outputs = new ArrayList<>();
+			for (String raw : current.commands) {
+				String normalized = normalizeToolCommand(raw);
+				if (normalized == null) {
+					continue;
+				}
+				sendDebugMessage(player, "Tool cmd: /" + normalized);
+				String out = stripSkillPrefix(executeSkillCommandOnServerThread(player, normalized, true));
+				if (!out.isBlank()) {
+					outputs.add(out);
+				}
+			}
+			if (outputs.isEmpty()) {
+				return new ModeMessage("ASK", "Tool produced no output.", List.of(), current.searchUsed, current.sources, current.highlights);
+			}
+			String toolContext = "Tool output: " + String.join(" | ", outputs) + "\nUse this to answer the user. Respond with ASK/PLAN/COMMAND.";
+			current = callGeminiSafely(apiKey, prompt, context, history, toolContext, modelChoice);
+		}
+		if ("TOOL".equals(current.mode)) {
+			return new ModeMessage("ASK", "I couldn't complete the tool workflow. Try a more specific request.", List.of(), current.searchUsed, current.sources, current.highlights);
+		}
+		return current;
+	}
+
+	private static ModeMessage maybeRequestToolFromReply(
+		ServerPlayerEntity player,
+		String apiKey,
+		String prompt,
+		String context,
+		List<ChatTurn> history,
+		ModeMessage reply,
+		ModelChoice modelChoice
+	) {
+		if (reply == null || player == null) {
+			return reply;
+		}
+		if ("TOOL".equals(reply.mode)) {
+			return reply;
+		}
+		if (reply.commands != null && !reply.commands.isEmpty()) {
+			return reply;
+		}
+		if (!shouldRequestToolFollowup(reply.message)) {
+			return reply;
+		}
+		String toolPrompt =
+			"You said you would scan/check/locate something. " +
+			"Provide TOOL commands only. " +
+			"Return JSON with mode TOOL and commands array. " +
+			"Do not answer the user yet.";
+		ModeMessage toolReply = callGeminiSafely(apiKey, prompt, context, history, toolPrompt, modelChoice);
+		if ("TOOL".equals(toolReply.mode) && toolReply.commands != null && !toolReply.commands.isEmpty()) {
+			return toolReply;
+		}
+		return reply;
+	}
+
+	private static boolean shouldRequestToolFollowup(String message) {
+		if (message == null || message.isBlank()) {
+			return false;
+		}
+		String lower = message.toLowerCase(Locale.ROOT);
+		if (!containsAny(lower, "scan", "scanning", "search", "searching", "check", "checking", "inspect", "inspecting",
+			"look", "looking", "find", "finding", "locate", "locating", "nearest", "contents", "inside")) {
+			return false;
+		}
+		return true;
+	}
+
+	private static String normalizeToolCommand(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		String trimmed = raw.trim();
+		if (trimmed.startsWith("/")) {
+			trimmed = trimmed.substring(1).trim();
+		}
+		int cut = trimmed.indexOf('(');
+		if (cut >= 0) {
+			trimmed = trimmed.substring(0, cut).trim();
+		}
+		trimmed = trimmed.replaceAll("[\\]\\)\\.,;]+$", "").trim();
+		String lower = trimmed.toLowerCase(Locale.ROOT);
+		if (lower.startsWith("chat skill")) {
+			return trimmed;
+		}
+		if (lower.startsWith("skill ")) {
+			return "chat " + trimmed;
+		}
+		return "chat skill " + trimmed;
+	}
+
+	private static ModeMessage handleContinueLoop(
+		ServerPlayerEntity player,
+		String apiKey,
+		String prompt,
+		String context,
+		List<ChatTurn> history,
+		ModeMessage reply,
+		ModelChoice modelChoice
+	) {
+		if (reply == null) {
+			return reply;
+		}
+		ModeMessage current = reply;
+		if ("PLAN".equals(current.mode) && shouldAutoContinue(prompt, current.message)) {
+			current = new ModeMessage("CONTINUE", current.message, List.of(), current.searchUsed, current.sources, List.of());
+		}
+		if ("COMMAND".equals(current.mode) && (current.commands == null || current.commands.isEmpty())
+			&& shouldAutoContinue(prompt, current.message)) {
+			current = new ModeMessage("CONTINUE", current.message, List.of(), current.searchUsed, current.sources, List.of());
+		}
+		if (!"CONTINUE".equals(current.mode)) {
+			return current;
+		}
+		int steps = 0;
+		while ("CONTINUE".equals(current.mode) && steps < MAX_CONTINUE_STEPS) {
+			steps++;
+			if (player != null) {
+				setStatus(player, "Iterating on the plan...", Formatting.AQUA);
+			}
+			String continueContext =
+				"Previous step: " + current.message + "\n" +
+				"Continue the task. If more steps are needed, respond with mode CONTINUE. " +
+				"Otherwise respond with ASK, PLAN, or COMMAND.";
+			current = callGeminiSafely(apiKey, prompt, context, history, continueContext, modelChoice);
+		}
+		if ("CONTINUE".equals(current.mode)) {
+			return new ModeMessage(
+				"ASK",
+				"I couldn't complete the task after several steps. Try a more specific request.",
+				List.of(),
+				current.searchUsed,
+				current.sources,
+				List.of()
+			);
+		}
+		return current;
+	}
+
+	private static boolean shouldAutoContinue(String prompt, String replyMessage) {
+		String combined = ((prompt == null ? "" : prompt) + " " + (replyMessage == null ? "" : replyMessage))
+			.toLowerCase(Locale.ROOT);
+		if (combined.isBlank()) {
+			return false;
+		}
+		if (containsAny(combined,
+			"continue", "keep going", "step by step", "do it", "do it again", "and then",
+			"first", "next", "after that", "then", "scan the area", "scan", "scanning",
+			"search", "searching", "harvest", "collect", "craft", "gather", "find"
+		)) {
+			return true;
+		}
+		return false;
 	}
 
 	private static CommandResult executeCommands(ServerPlayerEntity player, List<String> commands) {
@@ -2315,6 +2699,30 @@ public static final String MOD_ID = "gemini-ai-companion";
 				String nearby = buildNearbyEntitiesContext(player, "scan entities nearby", true);
 				yield prefix + (nearby.isEmpty() ? "Nearby entities: none" : "Nearby entities: " + nearby);
 			}
+			case "blocks" -> {
+				String target = parts.length >= 4 ? parts[3] : "";
+				int radius = parts.length >= 5 ? parseInteger(parts[4], DEFAULT_BLOCK_SCAN_RADIUS) : DEFAULT_BLOCK_SCAN_RADIUS;
+				yield prefix + buildBlockScanSkillOutput(player, target, radius);
+			}
+			case "containers" -> {
+				String filter = null;
+				int radius = DEFAULT_BLOCK_SCAN_RADIUS;
+				if (parts.length >= 4) {
+					if (isInteger(parts[3])) {
+						radius = parseInteger(parts[3], DEFAULT_BLOCK_SCAN_RADIUS);
+					} else {
+						filter = parts[3];
+						if (parts.length >= 5) {
+							radius = parseInteger(parts[4], DEFAULT_BLOCK_SCAN_RADIUS);
+						}
+					}
+				}
+				yield prefix + buildContainerSkillOutput(player, filter, radius);
+			}
+			case "blockdata" -> {
+				String args = parts.length >= 4 ? String.join(" ", java.util.Arrays.copyOfRange(parts, 3, parts.length)) : "";
+				yield prefix + buildBlockDataSkillOutput(player, args);
+			}
 			case "players" -> {
 				String players = buildPlayerListContext(player);
 				yield prefix + (players.isEmpty() ? "Players: none" : "Players: " + players);
@@ -2333,8 +2741,26 @@ public static final String MOD_ID = "gemini-ai-companion";
 				ItemStack stack = resolveNbtTarget(player, parts, target);
 				yield prefix + formatNbtEntry(target, stack);
 			}
+			case "lookup" -> {
+				String target = parts.length >= 4 ? parts[3].toLowerCase(Locale.ROOT) : "mainhand";
+				ItemStack stack = resolveNbtTarget(player, parts, target);
+				yield prefix + formatLookupEntry(player, target, stack);
+			}
 			default -> prefix + "error: unknown skill";
 		};
+	}
+
+	private static String executeSkillCommandOnServerThread(ServerPlayerEntity player, String command, boolean internal) {
+		if (player == null) {
+			return (internal ? "SKILL: " : "") + "error: no player";
+		}
+		try {
+			var future = new java.util.concurrent.CompletableFuture<String>();
+			player.getServer().execute(() -> future.complete(executeSkillCommand(player, command, internal)));
+			return future.get(3, java.util.concurrent.TimeUnit.SECONDS);
+		} catch (Exception e) {
+			return executeSkillCommand(player, command, internal);
+		}
 	}
 
 	private static ItemStack resolveNbtTarget(ServerPlayerEntity player, String[] parts, String target) {
@@ -2452,6 +2878,485 @@ public static final String MOD_ID = "gemini-ai-companion";
 			entry.append(" components=").append(components);
 		}
 		return entry.toString();
+	}
+
+	private static String formatLookupEntry(ServerPlayerEntity player, String label, ItemStack stack) {
+		if (!isStackPresent(stack)) {
+			return "Lookup: empty";
+		}
+		String id = Registries.ITEM.getId(stack.getItem()).toString();
+		TooltipType type = (player != null && player.isCreative()) ? TooltipType.ADVANCED : TooltipType.BASIC;
+		List<Text> tooltip = stack.getTooltip(Item.TooltipContext.DEFAULT, player, type);
+		List<String> lines = new ArrayList<>();
+		for (Text line : tooltip) {
+			String text = line.getString();
+			if (text != null && !text.isBlank()) {
+				lines.add(text.trim());
+			}
+			if (lines.size() >= 12) {
+				break;
+			}
+		}
+		if (tooltip.size() > lines.size()) {
+			lines.add("...");
+		}
+		StringBuilder entry = new StringBuilder();
+		entry.append("Lookup ").append(label).append(": ").append(id).append(" x").append(stack.getCount());
+		if (!lines.isEmpty()) {
+			entry.append(" | Tooltip: ").append(String.join(" / ", lines));
+		}
+		return entry.toString();
+	}
+
+	private static String buildBlockScanSkillOutput(ServerPlayerEntity player, String rawTarget, int radius) {
+		if (player == null) {
+			return "Blocks: unavailable";
+		}
+		if (rawTarget == null || rawTarget.isBlank()) {
+			return "Blocks error: missing target";
+		}
+		BlockTarget target = resolveBlockTarget(rawTarget);
+		if (target == null) {
+			return "Blocks error: unknown block " + rawTarget;
+		}
+		BlockScanResult result = scanForBlocks(player, target, radius, MAX_BLOCK_SCAN_POSITIONS, MAX_BLOCK_SCAN_RESULTS);
+		String label = target.label();
+		if (result.totalMatches() == 0) {
+			return "Blocks " + label + " within " + result.radius() + " blocks: none";
+		}
+		List<BlockMatch> matches = new ArrayList<>(result.matches());
+		matches.sort((a, b) -> Double.compare(a.distance(), b.distance()));
+		List<String> entries = new ArrayList<>();
+		for (BlockMatch match : matches) {
+			BlockPos pos = match.pos();
+			String blockId = Registries.BLOCK.getId(match.state().getBlock()).toString();
+			String stateInfo = formatBlockState(match.state());
+			String entry = blockId + " @ " + pos.getX() + "," + pos.getY() + "," + pos.getZ()
+				+ " (" + formatDistance(match.distance()) + ")";
+			if (!stateInfo.isBlank()) {
+				entry += " {" + stateInfo + "}";
+			}
+			BlockEntity entity = player.getServerWorld().getBlockEntity(pos);
+			if (entity != null) {
+				String typeId = Registries.BLOCK_ENTITY_TYPE.getId(entity.getType()).toString();
+				entry += " be=" + typeId;
+			}
+			entries.add(entry);
+		}
+		StringBuilder out = new StringBuilder();
+		out.append("Blocks ").append(label).append(" within ").append(result.radius()).append(" blocks");
+		if (result.clamped()) {
+			out.append(" (clamped)");
+		}
+		out.append(": total ").append(result.totalMatches()).append(", showing ").append(matches.size()).append(": ");
+		out.append(String.join("; ", entries));
+		return out.toString();
+	}
+
+	private static String buildContainerSkillOutput(ServerPlayerEntity player, String filter, int radius) {
+		if (player == null) {
+			return "Containers: unavailable";
+		}
+		BlockTarget target = null;
+		if (filter != null && !filter.isBlank()) {
+			target = resolveBlockTarget(filter);
+			if (target == null) {
+				return "Containers error: unknown block " + filter;
+			}
+		}
+		ContainerScanResult result = scanForContainers(player, target, radius, MAX_BLOCK_SCAN_POSITIONS, MAX_CONTAINER_RESULTS);
+		if (result.totalMatches() == 0) {
+			return "Containers within " + result.radius() + " blocks: none";
+		}
+		List<ContainerMatch> matches = new ArrayList<>(result.matches());
+		matches.sort((a, b) -> Double.compare(a.distance(), b.distance()));
+		List<String> entries = new ArrayList<>();
+		for (ContainerMatch match : matches) {
+			BlockPos pos = match.pos();
+			String blockId = Registries.BLOCK.getId(match.state().getBlock()).toString();
+			String entry = blockId + " @ " + pos.getX() + "," + pos.getY() + "," + pos.getZ()
+				+ " (" + formatDistance(match.distance()) + ")";
+			if (match.summary() != null && !match.summary().isBlank()) {
+				entry += " items: " + match.summary();
+			}
+			entries.add(entry);
+		}
+		StringBuilder out = new StringBuilder();
+		out.append("Containers within ").append(result.radius()).append(" blocks");
+		if (result.clamped()) {
+			out.append(" (clamped)");
+		}
+		out.append(": total ").append(result.totalMatches()).append(", showing ").append(matches.size()).append(": ");
+		out.append(String.join("; ", entries));
+		return out.toString();
+	}
+
+	private static String buildBlockDataSkillOutput(ServerPlayerEntity player, String args) {
+		if (player == null) {
+			return "BlockData: unavailable";
+		}
+		String trimmed = args == null ? "" : args.trim();
+		if (trimmed.isBlank()) {
+			return "BlockData error: missing target (use x y z or nearest)";
+		}
+		String[] parts = trimmed.split("\\s+");
+		if (parts.length >= 3 && isInteger(parts[0]) && isInteger(parts[1]) && isInteger(parts[2])) {
+			BlockPos pos = new BlockPos(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
+			return formatBlockEntityData(player, pos);
+		}
+
+		boolean nearest = false;
+		String filter = null;
+		int radius = DEFAULT_BLOCK_SCAN_RADIUS;
+		for (String raw : parts) {
+			if (raw == null || raw.isBlank()) {
+				continue;
+			}
+			String token = raw.toLowerCase(Locale.ROOT).replace(",", "");
+			if ("nearest".equals(token) || "closest".equals(token)) {
+				nearest = true;
+				continue;
+			}
+			if (isInteger(token) && radius == DEFAULT_BLOCK_SCAN_RADIUS) {
+				radius = parseInteger(token, radius);
+				continue;
+			}
+			if (filter == null) {
+				filter = raw;
+			}
+		}
+		if (!nearest && filter == null && parts.length >= 1) {
+			filter = parts[0];
+		}
+
+		BlockTarget target = null;
+		if (filter != null && !filter.isBlank()) {
+			target = resolveBlockTarget(filter);
+			if (target == null) {
+				return "BlockData error: unknown block " + filter;
+			}
+		}
+
+		ContainerMatch nearestMatch = findNearestContainer(player, target, radius, MAX_BLOCK_SCAN_POSITIONS);
+		if (nearestMatch == null) {
+			String label = target == null ? "containers" : target.label();
+			return "BlockData: no " + label + " within " + Math.max(1, radius) + " blocks";
+		}
+		return formatBlockEntityData(player, nearestMatch.pos());
+	}
+
+	private static ContainerMatch findNearestContainer(ServerPlayerEntity player, BlockTarget target, int requestedRadius, int maxPositions) {
+		if (player == null) {
+			return null;
+		}
+		ServerWorld world = player.getServerWorld();
+		BlockPos center = player.getBlockPos();
+		int radius = Math.max(1, requestedRadius);
+		int maxRadius = maxScanRadius(maxPositions);
+		if (radius > maxRadius) {
+			radius = maxRadius;
+		}
+
+		ContainerMatch nearest = null;
+		BlockPos min = center.add(-radius, -radius, -radius);
+		BlockPos max = center.add(radius, radius, radius);
+		for (BlockPos pos : BlockPos.iterate(min, max)) {
+			BlockEntity entity = world.getBlockEntity(pos);
+			if (!(entity instanceof Inventory inventory)) {
+				continue;
+			}
+			BlockState state = world.getBlockState(pos);
+			if (target != null && !target.matches(state)) {
+				continue;
+			}
+			double distance = Math.sqrt(player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5));
+			String summary = summarizeInventory(inventory);
+			if (nearest == null || distance < nearest.distance()) {
+				nearest = new ContainerMatch(pos.toImmutable(), state, distance, summary);
+			}
+		}
+		return nearest;
+	}
+
+	private static String formatBlockEntityData(ServerPlayerEntity player, BlockPos pos) {
+		ServerWorld world = player.getServerWorld();
+		BlockEntity entity = world.getBlockEntity(pos);
+		if (entity == null) {
+			return "BlockData: no block entity at " + pos.getX() + "," + pos.getY() + "," + pos.getZ();
+		}
+		String id = Registries.BLOCK_ENTITY_TYPE.getId(entity.getType()).toString();
+		NbtCompound nbt = new NbtCompound();
+		try {
+			nbt = entity.createNbt(player.getRegistryManager());
+		} catch (Throwable ignored) {
+			// fallback below
+		}
+		String nbtText = nbt.asString();
+		nbtText = truncate(nbtText, 900);
+		String summary = "";
+		if (entity instanceof Inventory inventory) {
+			summary = summarizeInventory(inventory);
+		}
+		String entry = "BlockData " + id + " @ " + pos.getX() + "," + pos.getY() + "," + pos.getZ() + ": " + nbtText;
+		if (!summary.isBlank()) {
+			entry += " | items: " + summary;
+		}
+		return entry;
+	}
+
+	private static String truncate(String text, int max) {
+		if (text == null) {
+			return "";
+		}
+		if (text.length() <= max) {
+			return text;
+		}
+		return text.substring(0, Math.max(0, max - 3)) + "...";
+	}
+
+	private static BlockScanResult scanForBlocks(ServerPlayerEntity player, BlockTarget target, int requestedRadius, int maxPositions, int maxResults) {
+		ServerWorld world = player.getServerWorld();
+		BlockPos center = player.getBlockPos();
+		int radius = Math.max(1, requestedRadius);
+		int maxRadius = maxScanRadius(maxPositions);
+		boolean clamped = false;
+		if (radius > maxRadius) {
+			radius = maxRadius;
+			clamped = true;
+		}
+
+		List<BlockMatch> matches = new ArrayList<>();
+		int total = 0;
+		BlockPos min = center.add(-radius, -radius, -radius);
+		BlockPos max = center.add(radius, radius, radius);
+		for (BlockPos pos : BlockPos.iterate(min, max)) {
+			BlockState state = world.getBlockState(pos);
+			if (!target.matches(state)) {
+				continue;
+			}
+			total++;
+			double distance = Math.sqrt(player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5));
+			if (matches.size() < maxResults) {
+				matches.add(new BlockMatch(pos.toImmutable(), state, distance));
+			} else {
+				int farthestIndex = -1;
+				double farthestDistance = -1.0;
+				for (int i = 0; i < matches.size(); i++) {
+					double d = matches.get(i).distance();
+					if (d > farthestDistance) {
+						farthestDistance = d;
+						farthestIndex = i;
+					}
+				}
+				if (distance < farthestDistance && farthestIndex >= 0) {
+					matches.set(farthestIndex, new BlockMatch(pos.toImmutable(), state, distance));
+				}
+			}
+		}
+		return new BlockScanResult(matches, total, radius, clamped);
+	}
+
+	private static ContainerScanResult scanForContainers(ServerPlayerEntity player, BlockTarget target, int requestedRadius, int maxPositions, int maxResults) {
+		ServerWorld world = player.getServerWorld();
+		BlockPos center = player.getBlockPos();
+		int radius = Math.max(1, requestedRadius);
+		int maxRadius = maxScanRadius(maxPositions);
+		boolean clamped = false;
+		if (radius > maxRadius) {
+			radius = maxRadius;
+			clamped = true;
+		}
+
+		List<ContainerMatch> matches = new ArrayList<>();
+		int total = 0;
+		BlockPos min = center.add(-radius, -radius, -radius);
+		BlockPos max = center.add(radius, radius, radius);
+		for (BlockPos pos : BlockPos.iterate(min, max)) {
+			BlockState state = world.getBlockState(pos);
+			if (target != null && !target.matches(state)) {
+				continue;
+			}
+			BlockEntity entity = world.getBlockEntity(pos);
+			if (!(entity instanceof Inventory inventory)) {
+				continue;
+			}
+			total++;
+			double distance = Math.sqrt(player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5));
+			String summary = summarizeInventory(inventory);
+			if (matches.size() < maxResults) {
+				matches.add(new ContainerMatch(pos.toImmutable(), state, distance, summary));
+			} else {
+				int farthestIndex = -1;
+				double farthestDistance = -1.0;
+				for (int i = 0; i < matches.size(); i++) {
+					double d = matches.get(i).distance();
+					if (d > farthestDistance) {
+						farthestDistance = d;
+						farthestIndex = i;
+					}
+				}
+				if (distance < farthestDistance && farthestIndex >= 0) {
+					matches.set(farthestIndex, new ContainerMatch(pos.toImmutable(), state, distance, summary));
+				}
+			}
+		}
+		return new ContainerScanResult(matches, total, radius, clamped);
+	}
+
+	private static int maxScanRadius(int maxPositions) {
+		double root = Math.cbrt(Math.max(1, maxPositions));
+		int radius = (int) Math.floor((root - 1.0) / 2.0);
+		return Math.max(1, radius);
+	}
+
+	private static String summarizeInventory(Inventory inventory) {
+		if (inventory == null) {
+			return "empty";
+		}
+		Map<String, Integer> totals = new HashMap<>();
+		int filled = 0;
+		for (int i = 0; i < inventory.size(); i++) {
+			ItemStack stack = inventory.getStack(i);
+			if (stack == null || stack.isEmpty()) {
+				continue;
+			}
+			filled++;
+			String id = Registries.ITEM.getId(stack.getItem()).toString();
+			totals.merge(id, stack.getCount(), Integer::sum);
+		}
+		if (totals.isEmpty()) {
+			return "empty";
+		}
+		List<Map.Entry<String, Integer>> sorted = new ArrayList<>(totals.entrySet());
+		sorted.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+		List<String> parts = new ArrayList<>();
+		for (int i = 0; i < sorted.size() && i < 3; i++) {
+			var entry = sorted.get(i);
+			parts.add(entry.getKey() + " x" + entry.getValue());
+		}
+		String summary = String.join(", ", parts);
+		if (totals.size() > parts.size()) {
+			summary += " (+" + (totals.size() - parts.size()) + " more types)";
+		}
+		return summary + " (" + filled + " stacks)";
+	}
+
+	private static String formatBlockState(BlockState state) {
+		if (state == null || state.getEntries().isEmpty()) {
+			return "";
+		}
+		StringBuilder out = new StringBuilder();
+		for (var entry : state.getEntries().entrySet()) {
+			if (!out.isEmpty()) {
+				out.append(", ");
+			}
+			out.append(entry.getKey().getName()).append("=").append(entry.getValue());
+			if (out.length() > 120) {
+				out.append("...");
+				break;
+			}
+		}
+		return out.toString();
+	}
+
+	private static String formatDistance(double distance) {
+		return String.format(Locale.ROOT, "%.1f", distance);
+	}
+
+	private static BlockTarget resolveBlockTarget(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		String token = raw.trim().toLowerCase(Locale.ROOT);
+		if (token.startsWith("\"") && token.endsWith("\"") && token.length() > 1) {
+			token = token.substring(1, token.length() - 1);
+		}
+		boolean isTag = token.startsWith("#");
+		String idText = isTag ? token.substring(1) : token;
+		String resolved = null;
+		if (!idText.contains(":")) {
+			resolved = "minecraft:" + idText;
+		} else {
+			resolved = idText;
+		}
+		Identifier id = Identifier.tryParse(resolved);
+		if (id != null && isTag) {
+			TagKey<Block> tag = TagKey.of(RegistryKeys.BLOCK, id);
+			return new BlockTarget("#" + id, null, tag, true);
+		}
+		if (id != null && Registries.BLOCK.containsId(id)) {
+			return new BlockTarget(id.toString(), Registries.BLOCK.get(id), null, false);
+		}
+
+		String guess = tryResolveBlockId(token, idText);
+		if (guess != null) {
+			Identifier guessId = Identifier.tryParse(guess);
+			if (guessId != null && Registries.BLOCK.containsId(guessId)) {
+				String label = guess.equals(token) ? guess : guess + " (auto from " + token + ")";
+				return new BlockTarget(label, Registries.BLOCK.get(guessId), null, false);
+			}
+		}
+
+		List<String> suggestions = findRegistryMatches(Registries.BLOCK.getIds(), tokenizePrompt(token), 1);
+		if (!suggestions.isEmpty()) {
+			String suggestion = suggestions.get(0);
+			Identifier suggestionId = Identifier.tryParse(suggestion);
+			if (suggestionId != null && Registries.BLOCK.containsId(suggestionId)) {
+				return new BlockTarget(suggestion + " (auto from " + token + ")", Registries.BLOCK.get(suggestionId), null, false);
+			}
+		}
+		return null;
+	}
+
+	private static String tryResolveBlockId(String token, String idText) {
+		String normalized = idText;
+		if (normalized.contains(" ")) {
+			normalized = normalized.replace(' ', '_');
+		}
+		String candidate = normalized.contains(":") ? normalized : "minecraft:" + normalized;
+		if (Identifier.tryParse(candidate) != null && Registries.BLOCK.containsId(Identifier.tryParse(candidate))) {
+			return candidate;
+		}
+		if (normalized.endsWith("s")) {
+			String singular = normalized.substring(0, normalized.length() - 1);
+			String singularCandidate = singular.contains(":") ? singular : "minecraft:" + singular;
+			if (Identifier.tryParse(singularCandidate) != null && Registries.BLOCK.containsId(Identifier.tryParse(singularCandidate))) {
+				return singularCandidate;
+			}
+		}
+		if (token.contains("chest")) {
+			return "minecraft:chest";
+		}
+		if (token.contains("barrel")) {
+			return "minecraft:barrel";
+		}
+		if (token.contains("shulker")) {
+			return "minecraft:shulker_box";
+		}
+		return null;
+	}
+
+	private static boolean isInteger(String value) {
+		if (value == null || value.isBlank()) {
+			return false;
+		}
+		try {
+			Integer.parseInt(value);
+			return true;
+		} catch (NumberFormatException e) {
+			return false;
+		}
+	}
+
+	private static int parseInteger(String value, int fallback) {
+		if (value == null) {
+			return fallback;
+		}
+		try {
+			return Integer.parseInt(value.trim());
+		} catch (NumberFormatException e) {
+			return fallback;
+		}
 	}
 
 	private static String buildPlayerStatsContext(ServerPlayerEntity player) {
@@ -3005,7 +3910,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 		try {
 			return callGemini(apiKey, prompt, context, history, errorContext, modelChoice);
 		} catch (Exception e) {
-			return new ModeMessage("ASK", "Error: " + e.getMessage(), List.of(), false, List.of());
+			return new ModeMessage("ASK", "Error: " + e.getMessage(), List.of(), false, List.of(), List.of());
 		}
 	}
 
@@ -3021,7 +3926,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 		try {
 			return callGeminiVision(apiKey, prompt, context, history, mimeType, imageBytes, modelChoice);
 		} catch (Exception e) {
-			return new ModeMessage("ASK", "Error: " + e.getMessage(), List.of(), false, List.of());
+			return new ModeMessage("ASK", "Error: " + e.getMessage(), List.of(), false, List.of(), List.of());
 		}
 	}
 
@@ -3092,29 +3997,29 @@ public static final String MOD_ID = "gemini-ai-companion";
 
 		HttpResponse<String> response = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 		if (response.statusCode() < 200 || response.statusCode() >= 300) {
-			return new ModeMessage("ASK", "Error: HTTP " + response.statusCode() + " - " + response.body(), List.of(), false, List.of());
+			return new ModeMessage("ASK", "Error: HTTP " + response.statusCode() + " - " + response.body(), List.of(), false, List.of(), List.of());
 		}
 
 		JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
 		JsonArray candidates = json.getAsJsonArray("candidates");
 		if (candidates == null || candidates.isEmpty()) {
-			return new ModeMessage("ASK", "No response.", List.of(), false, List.of());
+			return new ModeMessage("ASK", "No response.", List.of(), false, List.of(), List.of());
 		}
 
 		JsonObject first = candidates.get(0).getAsJsonObject();
 		JsonObject responseContent = first.getAsJsonObject("content");
 		if (responseContent == null) {
-			return new ModeMessage("ASK", "No response.", List.of(), false, List.of());
+			return new ModeMessage("ASK", "No response.", List.of(), false, List.of(), List.of());
 		}
 
 		JsonArray responseParts = responseContent.getAsJsonArray("parts");
 		if (responseParts == null || responseParts.isEmpty()) {
-			return new ModeMessage("ASK", "No response.", List.of(), false, List.of());
+			return new ModeMessage("ASK", "No response.", List.of(), false, List.of(), List.of());
 		}
 
 		JsonObject firstPart = responseParts.get(0).getAsJsonObject();
 		if (!firstPart.has("text")) {
-			return new ModeMessage("ASK", "No response.", List.of(), false, List.of());
+			return new ModeMessage("ASK", "No response.", List.of(), false, List.of(), List.of());
 		}
 
 		String raw = firstPart.get("text").getAsString();
@@ -3198,29 +4103,29 @@ public static final String MOD_ID = "gemini-ai-companion";
 
 		HttpResponse<String> response = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 		if (response.statusCode() < 200 || response.statusCode() >= 300) {
-			return new ModeMessage("ASK", "Error: HTTP " + response.statusCode() + " - " + response.body(), List.of(), false, List.of());
+			return new ModeMessage("ASK", "Error: HTTP " + response.statusCode() + " - " + response.body(), List.of(), false, List.of(), List.of());
 		}
 
 		JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
 		JsonArray candidates = json.getAsJsonArray("candidates");
 		if (candidates == null || candidates.isEmpty()) {
-			return new ModeMessage("ASK", "No response.", List.of(), false, List.of());
+			return new ModeMessage("ASK", "No response.", List.of(), false, List.of(), List.of());
 		}
 
 		JsonObject first = candidates.get(0).getAsJsonObject();
 		JsonObject responseContent = first.getAsJsonObject("content");
 		if (responseContent == null) {
-			return new ModeMessage("ASK", "No response.", List.of(), false, List.of());
+			return new ModeMessage("ASK", "No response.", List.of(), false, List.of(), List.of());
 		}
 
 		JsonArray responseParts = responseContent.getAsJsonArray("parts");
 		if (responseParts == null || responseParts.isEmpty()) {
-			return new ModeMessage("ASK", "No response.", List.of(), false, List.of());
+			return new ModeMessage("ASK", "No response.", List.of(), false, List.of(), List.of());
 		}
 
 		JsonObject firstPart = responseParts.get(0).getAsJsonObject();
 		if (!firstPart.has("text")) {
-			return new ModeMessage("ASK", "No response.", List.of(), false, List.of());
+			return new ModeMessage("ASK", "No response.", List.of(), false, List.of(), List.of());
 		}
 
 		String raw = firstPart.get("text").getAsString();
@@ -3302,9 +4207,15 @@ public static final String MOD_ID = "gemini-ai-companion";
 	}
 
 	private static ModeMessage parseModeMessage(String raw, boolean searchUsed, List<SourceLink> sources) {
+		if (raw == null) {
+			return new ModeMessage("ASK", "", List.of(), searchUsed, sources, List.of());
+		}
 		try {
 			String trimmed = extractJsonObject(raw);
 			JsonObject obj = lenientJsonObject(trimmed);
+			if (obj == null || obj.isEmpty()) {
+				throw new IllegalStateException("Empty JSON");
+			}
 			String mode = obj.has("mode") ? obj.get("mode").getAsString() : "ASK";
 			String message = obj.has("message") ? obj.get("message").getAsString() : raw;
 			List<String> commands = new ArrayList<>();
@@ -3313,13 +4224,272 @@ public static final String MOD_ID = "gemini-ai-companion";
 					commands.add(element.getAsString());
 				}
 			}
-			return new ModeMessage(normalizeMode(mode), message, commands, searchUsed, sources);
+			List<Highlight> highlights = parseHighlights(obj);
+			return new ModeMessage(normalizeMode(mode), message, commands, searchUsed, sources, highlights);
 		} catch (Exception e) {
-			if (looksLikeCommandPayload(raw)) {
-				return new ModeMessage("COMMAND", "Invalid command payload. Regenerate commands only.", List.of(), searchUsed, sources);
-			}
-			return new ModeMessage("ASK", raw, List.of(), searchUsed, sources);
+			return parseModeMessageLoose(raw, searchUsed, sources);
 		}
+	}
+
+	private static ModeMessage parseModeMessageLoose(String raw, boolean searchUsed, List<SourceLink> sources) {
+		String text = raw == null ? "" : raw.trim();
+		List<String> commands = extractCommands(text);
+		String detectedMode = detectExplicitMode(text);
+		String mode = detectedMode;
+		if (mode == null || mode.isBlank()) {
+			if (!commands.isEmpty()) {
+				boolean hasSkill = commands.stream().anyMatch(cmd -> cmd != null && cmd.toLowerCase(Locale.ROOT).startsWith("chat skill"));
+				mode = hasSkill ? "TOOL" : "COMMAND";
+			} else if (text.toLowerCase(Locale.ROOT).contains("continue")) {
+				mode = "CONTINUE";
+			} else if (text.toLowerCase(Locale.ROOT).contains("plan") || text.toLowerCase(Locale.ROOT).contains("step")) {
+				mode = "PLAN";
+			} else {
+				mode = "ASK";
+			}
+		}
+		String message = stripCommandText(text);
+		if (message.isBlank()) {
+			message = commands.isEmpty() ? text : "Executing commands.";
+		}
+		return new ModeMessage(normalizeMode(mode), message, commands, searchUsed, sources, List.of());
+	}
+
+	private static String detectExplicitMode(String text) {
+		if (text == null) {
+			return null;
+		}
+		String lower = text.toLowerCase(Locale.ROOT);
+		if (lower.contains("mode: command") || lower.contains("node: command") || lower.contains("[command]") || lower.contains("command mode")) {
+			return "COMMAND";
+		}
+		if (lower.contains("mode: plan") || lower.contains("node: plan") || lower.contains("[plan]") || lower.contains("plan mode")) {
+			return "PLAN";
+		}
+		if (lower.contains("mode: continue") || lower.contains("node: continue") || lower.contains("[continue]")) {
+			return "CONTINUE";
+		}
+		if (lower.contains("mode: tool") || lower.contains("node: tool") || lower.contains("[tool]")) {
+			return "TOOL";
+		}
+		if (lower.contains("mode: ask") || lower.contains("node: ask") || lower.contains("[ask]")) {
+			return "ASK";
+		}
+		return null;
+	}
+
+	private static List<String> extractCommands(String text) {
+		List<String> commands = new ArrayList<>();
+		if (text == null || text.isBlank()) {
+			return commands;
+		}
+		String[] lines = text.split("\\r?\\n");
+		for (String line : lines) {
+			if (line == null) {
+				continue;
+			}
+			String trimmed = line.trim();
+			if (trimmed.isBlank()) {
+				continue;
+			}
+			String lower = trimmed.toLowerCase(Locale.ROOT);
+			if (lower.startsWith("commands:") || lower.startsWith("command:")) {
+				String payload = trimmed.substring(trimmed.indexOf(':') + 1).trim();
+				commands.addAll(splitCommands(payload));
+				continue;
+			}
+			String cleaned = stripBulletPrefix(trimmed);
+			if (cleaned.startsWith("/")) {
+				String cmd = cleaned.substring(1).trim();
+				if (!cmd.isBlank()) {
+					commands.add(cmd);
+				}
+				continue;
+			}
+		}
+		if (commands.isEmpty()) {
+			int idx = text.toLowerCase(Locale.ROOT).indexOf("commands:");
+			if (idx >= 0) {
+				String payload = text.substring(idx + "commands:".length()).trim();
+				commands.addAll(splitCommands(payload));
+			}
+		}
+		if (commands.isEmpty()) {
+			Pattern pattern = Pattern.compile("(?:^|\\s)(/)?chat\\s+skill\\s+([^\\r\\n]+)", Pattern.CASE_INSENSITIVE);
+			Matcher matcher = pattern.matcher(text);
+			while (matcher.find()) {
+				String payload = matcher.group(2);
+				if (payload == null) {
+					continue;
+				}
+				String cleaned = payload.trim();
+				int cut = cleaned.indexOf('(');
+				if (cut >= 0) {
+					cleaned = cleaned.substring(0, cut).trim();
+				}
+				cleaned = cleaned.replaceAll("[\\]\\)\\.,;]+$", "").trim();
+				if (!cleaned.isBlank()) {
+					commands.add("chat skill " + cleaned);
+				}
+			}
+		}
+		return commands;
+	}
+
+	private static List<String> splitCommands(String payload) {
+		if (payload == null || payload.isBlank()) {
+			return List.of();
+		}
+		String cleaned = payload.trim();
+		if (cleaned.startsWith("/")) {
+			cleaned = cleaned.substring(1);
+		}
+		List<String> out = new ArrayList<>();
+		for (String part : cleaned.split("\\s*\\|\\s*|\\s*;\\s*")) {
+			String cmd = part.trim();
+			if (cmd.startsWith("/")) {
+				cmd = cmd.substring(1).trim();
+			}
+			if (!cmd.isBlank()) {
+				out.add(cmd);
+			}
+		}
+		return out;
+	}
+
+	private static String stripCommandText(String text) {
+		if (text == null || text.isBlank()) {
+			return "";
+		}
+		String[] lines = text.split("\\r?\\n");
+		List<String> keep = new ArrayList<>();
+		for (String line : lines) {
+			if (line == null) {
+				continue;
+			}
+			String trimmed = line.trim();
+			if (trimmed.isBlank()) {
+				continue;
+			}
+			String lower = trimmed.toLowerCase(Locale.ROOT);
+			if (lower.startsWith("commands:") || lower.startsWith("command:")) {
+				continue;
+			}
+			String cleaned = stripBulletPrefix(trimmed);
+			if (cleaned.startsWith("/")) {
+				continue;
+			}
+			keep.add(trimmed);
+		}
+		return String.join(" ", keep).trim();
+	}
+
+	private static String stripBulletPrefix(String text) {
+		if (text == null) {
+			return "";
+		}
+		String trimmed = text.trim();
+		if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("• ")) {
+			return trimmed.substring(2).trim();
+		}
+		return trimmed;
+	}
+
+	private static List<Highlight> parseHighlights(JsonObject obj) {
+		if (obj == null || !obj.has("highlights") || !obj.get("highlights").isJsonArray()) {
+			return List.of();
+		}
+		long now = System.currentTimeMillis();
+		List<Highlight> highlights = new ArrayList<>();
+		for (JsonElement element : obj.getAsJsonArray("highlights")) {
+			if (!element.isJsonObject()) {
+				continue;
+			}
+			JsonObject h = element.getAsJsonObject();
+			if (!h.has("x") || !h.has("y") || !h.has("z")) {
+				continue;
+			}
+			double x = h.get("x").getAsDouble();
+			double y = h.get("y").getAsDouble();
+			double z = h.get("z").getAsDouble();
+			String label = h.has("label") ? h.get("label").getAsString() : "";
+			String colorName = h.has("color") ? h.get("color").getAsString() : "white";
+			long duration = h.has("durationMs") ? h.get("durationMs").getAsLong() : 10_000L;
+			int color = parseHighlightColor(colorName);
+			// Always render highlights through blocks.
+			color = (color & 0x00FFFFFF) | 0xFE000000;
+			highlights.add(new Highlight(x, y, z, label, color, now + Math.max(1000L, duration)));
+		}
+		return highlights;
+	}
+
+	private static ModeMessage applyXrayOverride(ModeMessage message, String prompt) {
+		if (message == null || message.highlights == null || message.highlights.isEmpty()) {
+			return message;
+		}
+		if (!shouldForceXray(prompt)) {
+			return message;
+		}
+		List<Highlight> updated = forceXrayHighlights(message.highlights);
+		return new ModeMessage(message.mode, message.message, message.commands, message.searchUsed, message.sources, updated);
+	}
+
+	private static boolean shouldForceXray(String prompt) {
+		if (prompt == null || prompt.isBlank()) {
+			return false;
+		}
+		String lower = prompt.toLowerCase(Locale.ROOT);
+		return lower.contains("xray")
+			|| lower.contains("x-ray")
+			|| lower.contains("see through")
+			|| lower.contains("through blocks")
+			|| lower.contains("through walls")
+			|| lower.contains("behind walls")
+			|| lower.contains("wallhack")
+			|| lower.contains("visible through");
+	}
+
+	private static List<Highlight> forceXrayHighlights(List<Highlight> highlights) {
+		List<Highlight> updated = new ArrayList<>(highlights.size());
+		for (Highlight h : highlights) {
+			int color = (h.colorHex() & 0x00FFFFFF) | 0xFE000000;
+			updated.add(new Highlight(h.x(), h.y(), h.z(), h.label(), color, h.expiryMs()));
+		}
+		return updated;
+	}
+
+	private static int parseHighlightColor(String colorName) {
+		if (colorName == null) {
+			return 0xFFFFFFFF;
+		}
+		String lower = colorName.trim().toLowerCase(Locale.ROOT);
+		return switch (lower) {
+			case "red" -> 0xFFFF3B30;
+			case "green" -> 0xFF34C759;
+			case "blue" -> 0xFF0A84FF;
+			case "gold", "yellow" -> 0xFFFFC300;
+			case "purple" -> 0xFFBF5AF2;
+			case "white" -> 0xFFFFFFFF;
+			default -> {
+				try {
+					String clean = lower.startsWith("#") ? lower.substring(1) : lower;
+					int value = (int) Long.parseLong(clean, 16);
+					if (clean.length() <= 6) {
+						yield 0xFF000000 | value;
+					}
+					yield value;
+				} catch (Exception e) {
+					yield 0xFFFFFFFF;
+				}
+			}
+		};
+	}
+
+	private static void sendHighlights(ServerPlayerEntity player, List<Highlight> highlights) {
+		if (player == null || highlights == null || highlights.isEmpty()) {
+			return;
+		}
+		ServerPlayNetworking.send(player, new HighlightsPayloadS2C(highlights));
 	}
 
 	private static JsonObject lenientJsonObject(String json) {
@@ -3349,7 +4519,7 @@ public static final String MOD_ID = "gemini-ai-companion";
 
 	private static String normalizeMode(String mode) {
 		String upper = mode.trim().toUpperCase();
-		if (upper.equals("PLAN") || upper.equals("COMMAND")) {
+		if (upper.equals("PLAN") || upper.equals("COMMAND") || upper.equals("CONTINUE") || upper.equals("TOOL")) {
 			return upper;
 		}
 		return "ASK";
@@ -3359,6 +4529,8 @@ public static final String MOD_ID = "gemini-ai-companion";
 		return switch (mode) {
 			case "PLAN" -> Formatting.AQUA;
 			case "COMMAND" -> Formatting.GOLD;
+			case "CONTINUE" -> Formatting.AQUA;
+			case "TOOL" -> Formatting.LIGHT_PURPLE;
 			default -> Formatting.GREEN;
 		};
 	}
@@ -3373,6 +4545,8 @@ public static final String MOD_ID = "gemini-ai-companion";
 		return switch (mode) {
 			case "PLAN" -> "PLAN MODE";
 			case "COMMAND" -> "COMMAND MODE";
+			case "CONTINUE" -> "CONTINUE MODE";
+			case "TOOL" -> "TOOL MODE";
 			default -> "ASK MODE";
 		};
 	}
@@ -3842,6 +5016,71 @@ public static final String MOD_ID = "gemini-ai-companion";
 		return false;
 	}
 
+	private static String detectBlockTargetFromPrompt(String prompt) {
+		if (prompt == null || prompt.isBlank()) {
+			return null;
+		}
+		List<String> tokens = tokenizePrompt(prompt);
+		for (String token : tokens) {
+			if (!token.startsWith("#")) {
+				continue;
+			}
+			Identifier id = Identifier.tryParse(token.substring(1));
+			if (id != null) {
+				return token;
+			}
+		}
+		for (String token : tokens) {
+			if (!token.contains(":")) {
+				continue;
+			}
+			Identifier id = Identifier.tryParse(token);
+			if (id != null && Registries.BLOCK.containsId(id)) {
+				return token;
+			}
+		}
+		for (int i = 0; i < tokens.size(); i++) {
+			String first = tokens.get(i);
+			if (first.isBlank() || first.startsWith("#") || first.contains(":")) {
+				continue;
+			}
+			String single = "minecraft:" + first;
+			Identifier singleId = Identifier.tryParse(single);
+			if (singleId != null && Registries.BLOCK.containsId(singleId)) {
+				return single;
+			}
+			if (i + 1 < tokens.size()) {
+				String pair = "minecraft:" + first + "_" + tokens.get(i + 1);
+				Identifier pairId = Identifier.tryParse(pair);
+				if (pairId != null && Registries.BLOCK.containsId(pairId)) {
+					return pair;
+				}
+			}
+			if (i + 2 < tokens.size()) {
+				String triple = "minecraft:" + first + "_" + tokens.get(i + 1) + "_" + tokens.get(i + 2);
+				Identifier tripleId = Identifier.tryParse(triple);
+				if (tripleId != null && Registries.BLOCK.containsId(tripleId)) {
+					return triple;
+				}
+			}
+		}
+		if (prompt.contains("logs") || prompt.contains("log")) {
+			return "#minecraft:logs";
+		}
+		return null;
+	}
+
+	private static List<String> tokenizePrompt(String prompt) {
+		String[] raw = prompt.toLowerCase(Locale.ROOT).split("[^a-z0-9_:#]+");
+		List<String> tokens = new ArrayList<>();
+		for (String part : raw) {
+			if (part != null && !part.isBlank()) {
+				tokens.add(part);
+			}
+		}
+		return tokens;
+	}
+
 	private static String buildNearbyEntitiesContext(ServerPlayerEntity player, String prompt) {
 		return buildNearbyEntitiesContext(player, prompt, false);
 	}
@@ -4120,7 +5359,34 @@ public static final String MOD_ID = "gemini-ai-companion";
 		return hours + "h " + remMinutes + "m ago";
 	}
 
-	private record ModeMessage(String mode, String message, List<String> commands, boolean searchUsed, List<SourceLink> sources) {}
+	private record BlockMatch(BlockPos pos, BlockState state, double distance) {}
+
+	private record BlockScanResult(List<BlockMatch> matches, int totalMatches, int radius, boolean clamped) {}
+
+	private record ContainerMatch(BlockPos pos, BlockState state, double distance, String summary) {}
+
+	private record ContainerScanResult(List<ContainerMatch> matches, int totalMatches, int radius, boolean clamped) {}
+
+	private record BlockTarget(String label, Block block, TagKey<Block> tag, boolean isTag) {
+		boolean matches(BlockState state) {
+			if (state == null) {
+				return false;
+			}
+			if (isTag && tag != null) {
+				return state.isIn(tag);
+			}
+			return block != null && state.getBlock() == block;
+		}
+	}
+
+	private record ModeMessage(
+		String mode,
+		String message,
+		List<String> commands,
+		boolean searchUsed,
+		List<SourceLink> sources,
+		List<Highlight> highlights
+	) {}
 
 	private record CommandResult(boolean success, String errorSummary, List<String> outputs) {}
 
@@ -4543,6 +5809,16 @@ public static final String MOD_ID = "gemini-ai-companion";
 			return false;
 		}
 		return getTurnCount(playerId) >= MAX_HISTORY_TURNS;
+	}
+
+	private static void sendSetupReminder(ServerPlayerEntity player) {
+		long now = System.currentTimeMillis();
+		long last = SETUP_WARN_COOLDOWN.getOrDefault(player.getUuid(), 0L);
+		if (now - last < 8000L) {
+			return;
+		}
+		SETUP_WARN_COOLDOWN.put(player.getUuid(), now);
+		player.sendMessage(Text.literal("Gemini AI is not configured yet. Run /chat setup to begin.").formatted(Formatting.YELLOW), false);
 	}
 
 	private static int getTurnCount(UUID playerId) {
@@ -5089,6 +6365,14 @@ public static final String MOD_ID = "gemini-ai-companion";
 			return ModelChoice.FLASH_THINKING;
 		}
 		return ModelChoice.FLASH;
+	}
+
+	private static void applyCommandModificationLimit(MinecraftServer server) {
+		for (ServerWorld world : server.getWorlds()) {
+			world.getGameRules()
+				.get(GameRules.COMMAND_MODIFICATION_BLOCK_LIMIT)
+				.set(COMMAND_MODIFICATION_LIMIT, server);
+		}
 	}
 
 	private static Path keyDir() {

